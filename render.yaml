@@ -1,7 +1,3 @@
-# Blueprint Render — déploie l'API et l'interface Streamlit comme deux
-# services web distincts, chacun conteneurisé avec son propre Dockerfile.
-# Documentation : https://render.com/docs/blueprint-spec
-
 services:
   - type: web
     name: brain-tumor-api
@@ -18,7 +14,7 @@ services:
       - key: CONFIDENCE_THRESHOLD
         value: "0.5"
       - key: ALLOWED_ORIGINS
-        sync: false # à renseigner avec l'URL du service Streamlit une fois déployé
+        sync: false
 
   - type: web
     name: brain-tumor-ui
@@ -28,4 +24,4 @@ services:
     plan: starter
     envVars:
       - key: API_URL
-        sync: false # à renseigner avec l'URL publique du service brain-tumor-api
+        sync: false
