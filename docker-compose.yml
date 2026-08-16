@@ -1,0 +1,25 @@
+services:
+  api:
+    build: ./api
+    container_name: brain-tumor-api
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_PATH=/app/models/best.pt
+      - MAX_FILE_SIZE_MB=10
+      - CONFIDENCE_THRESHOLD=0.5
+      - ALLOWED_ORIGINS=*
+    volumes:
+      - ./api/models:/app/models:ro
+    restart: unless-stopped
+
+  streamlit_app:
+    build: ./streamlit_app
+    container_name: brain-tumor-ui
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      - api
+    restart: unless-stopped

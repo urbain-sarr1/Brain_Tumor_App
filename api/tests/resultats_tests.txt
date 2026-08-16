@@ -1,0 +1,40 @@
+
+========================================
+Exécution : 2026-08-08 15:19:10
+Tests exécutés : 12
+Tests réussis : 12
+Tests échoués : 0
+Statut : OK
+----------------------------------------
+Mesures détaillées
+----------------------------------------
+/health  -> temps moyen : 0.0061 s | min : 0.0054 s | max : 0.0069 s (sur 10 requête(s))
+/predict (warm-up, non comptabilisé) : 1.6033 s
+/predict -> temps moyen : 1.3094 s | min : 1.2499 s | max : 1.6861 s (sur 10 requête(s))
+Stabilité (5 requêtes successives) -> temps moyen : 1.2532 s | min : 1.2418 s | max : 1.2615 s | écart-type : 0.0069 s
+Performance du modèle (models/metrics.json) :
+  Precision    : 88.0% (seuil requis : 85%)
+  Recall       : 88.5% (seuil requis : 85%)
+  mAP@0.5      : 92.5% (seuil requis : 90%)
+  mAP@0.5:0.95 : 73.4% (seuil requis : 70%)
+========================================
+
+========================================
+Exécution : 2026-08-16 23:47:03
+Tests exécutés : 12
+Tests réussis : 12
+Tests échoués : 0
+Statut : OK
+----------------------------------------
+Mesures détaillées
+----------------------------------------
+/health  -> temps moyen : 0.0060 s | min : 0.0058 s | max : 0.0063 s (sur 10 requête(s))
+/predict (warm-up, non comptabilisé) : 12.9848 s
+/predict -> temps moyen : 0.9710 s | min : 0.8450 s | max : 1.0812 s (sur 10 requête(s))
+Stabilité (5 requêtes successives) -> temps moyen : 0.9788 s | min : 0.8032 s | max : 1.0892 s | écart-type : 0.0982 s
+Performance du modèle (models/metrics.json) :
+  Precision    : 88.0% (seuil requis : 85%)
+  Recall       : 88.5% (seuil requis : 85%)
+  mAP@0.5      : 92.5% (seuil requis : 90%)
+  mAP@0.5:0.95 : 73.4% (seuil requis : 70%)
+========================================

@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.pyo
+
+# Environnements
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Variables d'environnement
+.env
+
+# Fichiers temporaires
+*.tmp
+
+# Cache
+.cache/
+
+# Modèles d'entraînement volumineux
+api/models/baseline_segmentation_tumeur-2/
+
+# Si le modèle best.pt est trop volumineux pour GitHub,
+# décommenter la ligne suivante :
+# api/models/best.pt

@@ -1,0 +1,9 @@
+{
+    "modele": "YOLO11 — modèle retenu pour le déploiement",
+    "jeu_evaluation": "test",
+    "date_evaluation": "2026-08-08",
+    "precision": 0.880,
+    "recall": 0.885,
+    "map50": 0.925,
+    "map50_95": 0.734
+  }

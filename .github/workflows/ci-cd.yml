@@ -1,0 +1,58 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer les dépendances de l'API
+        run: |
+          pip install -r api/requirements-dev.txt flake8
+
+      - name: Analyse statique (flake8)
+        run: flake8 api --max-line-length=110 --extend-ignore=E203
+
+      - name: Tests unitaires (disponibilité, temps de réponse, performance, robustesse)
+        working-directory: api
+        run: pytest tests -v
+
+  build-images:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construire l'image de l'API
+        run: docker build -t brain-tumor-api:${{ github.sha }} ./api
+
+      - name: Construire l'image Streamlit
+        run: docker build -t brain-tumor-ui:${{ github.sha }} ./streamlit_app
+
+  deploy-render:
+    needs: build-images
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Déclencher le déploiement de l'API sur Render
+        run: curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_API }}"
+
+      - name: Déclencher le déploiement de l'interface Streamlit sur Render
+        run: curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_UI }}"
+
+      - name: Vérifier la disponibilité après déploiement
+        run: |
+          sleep 60
+          curl --fail "${{ secrets.API_HEALTH_URL }}" || exit 1
