@@ -1,27 +1,23 @@
 services:
   - type: web
-    name: brain-tumor-api
+    name: brain-tumor-app
     env: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: starter
-    healthCheckPath: /health
+    plan: free
+
     envVars:
       - key: MODEL_PATH
         value: /app/api/models/best.pt
+
       - key: MAX_FILE_SIZE_MB
         value: "10"
+
       - key: CONFIDENCE_THRESHOLD
         value: "0.5"
-      - key: ALLOWED_ORIGINS
-        sync: false
 
-  - type: web
-    name: brain-tumor-ui
-    env: docker
-    dockerfilePath: ./streamlit_app/Dockerfile
-    dockerContext: ./streamlit_app
-    plan: starter
-    envVars:
       - key: API_URL
-        sync: false
+        value: http://127.0.0.1:8000
+
+      - key: ALLOWED_ORIGINS
+        value: "*"
