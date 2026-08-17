@@ -168,9 +168,7 @@ with st.sidebar:
 
     st.write("**Modèle**")
 
-    st.write(
-        "YOLO11m-seg"
-    )
+    st.write("YOLO11m-seg")
 
     st.write(
         "Détection + classification + segmentation"
@@ -180,9 +178,7 @@ with st.sidebar:
 
     st.write("**Formats acceptés**")
 
-    st.write(
-        "JPEG / JPG / PNG"
-    )
+    st.write("JPEG / JPG / PNG")
 
     st.write(
         f"Taille maximale : {MAX_FILE_SIZE_MB} Mo"
@@ -312,7 +308,7 @@ if uploaded_file is not None:
         st.image(
             image,
             caption="Image IRM originale",
-            use_container_width=True
+            use_column_width=True
         )
 
     with col2:
@@ -478,7 +474,6 @@ if uploaded_file is not None:
                 0
             )
 
-            # Image originale retournée par l'API
             image_base64 = result.get(
                 "image_annotee_base64"
             )
@@ -498,7 +493,7 @@ if uploaded_file is not None:
                     st.image(
                         result_image,
                         caption="Résultat de l'analyse",
-                        use_container_width=True
+                        use_column_width=True
                     )
 
                 except Exception:
@@ -623,7 +618,7 @@ if uploaded_file is not None:
                         "Résultat YOLO11m-seg : "
                         "détection et masque de segmentation"
                     ),
-                    use_container_width=True
+                    use_column_width=True
                 )
 
             except Exception as exc:
