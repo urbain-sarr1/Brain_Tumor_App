@@ -7,18 +7,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY api/requirements.txt .
-
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY api ./api
+COPY streamlit_app ./streamlit_app
 
-EXPOSE 8000
+COPY start.sh .
+RUN chmod +x start.sh
 
-ENV MODEL_PATH=/app/api/models/best.pt
-ENV PORT=8000
+ENV API_URL=http://127.0.0.1:8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+EXPOSE 10000
 
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["./start.sh"]
