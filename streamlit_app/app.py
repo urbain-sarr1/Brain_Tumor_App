@@ -33,10 +33,7 @@ from PIL import Image
 # CONFIGURATION
 # ============================================================
 
-API_URL = os.getenv(
-    "API_URL",
-    "http://localhost:8000"
-)
+API_URL = "https://brain-tumor-app-tesg.onrender.com"
 
 MAX_FILE_SIZE_MB = 10
 
