@@ -65,7 +65,7 @@ run("git status")
 # 5. Commit
 # ============================================================
 
-run('git commit -m "Mise à jour de l application Brain Tumor"')
+run('git commit -m "Correction de bug"')
 
 
 # ============================================================
