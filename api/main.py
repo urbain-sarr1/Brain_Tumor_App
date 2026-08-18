@@ -4,13 +4,19 @@ API de détection, classification et segmentation de tumeurs cérébrales.
 Modèle :
     models/best.pt
 
+Optimisations mémoire :
+    - inférence PyTorch sans gradients
+    - limitation des threads CPU
+    - réduction des copies d'images
+    - libération explicite des résultats temporaires
+    - traitement des masques de manière économe
+    - nettoyage mémoire après chaque prédiction
+
 Le modèle YOLO utilisé est un modèle de SEGMENTATION.
-Les indicateurs géométriques (surface, périmètre, diamètre,
-centre, occupation) sont calculés à partir du masque réel de
-la tumeur, et non plus d'une simple bounding box.
 """
 
 import base64
+import gc
 import logging
 import os
 import time
@@ -18,10 +24,28 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import torch
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from ultralytics import YOLO
+
+
+# ============================================================
+# OPTIMISATION MÉMOIRE / CPU
+# ============================================================
+
+try:
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
+except Exception:
+    pass
+
+try:
+    cv2.setNumThreads(1)
+except Exception:
+    pass
 
 
 # ============================================================
@@ -37,12 +61,20 @@ MODEL_PATH = Path(
     )
 )
 
-MAX_FILE_SIZE_MB = 10
-CONFIDENCE_THRESHOLD = 0.5
+MAX_FILE_SIZE_MB = int(
+    os.getenv(
+        "MAX_FILE_SIZE_MB",
+        "10"
+    )
+)
 
-# Facteur de conversion pixel -> mm. À défaut de métadonnées DICOM
-# (spacing réel), une valeur par défaut est utilisée. À ajuster si
-# le spacing réel de l'IRM est disponible.
+CONFIDENCE_THRESHOLD = float(
+    os.getenv(
+        "CONFIDENCE_THRESHOLD",
+        "0.5"
+    )
+)
+
 PIXEL_SPACING_MM = float(
     os.getenv(
         "PIXEL_SPACING_MM",
@@ -66,9 +98,13 @@ DISCLAIMER = (
 # LOGGING
 # ============================================================
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO
+)
 
-logger = logging.getLogger("brain-tumor-api")
+logger = logging.getLogger(
+    "brain-tumor-api"
+)
 
 
 # ============================================================
@@ -78,10 +114,10 @@ logger = logging.getLogger("brain-tumor-api")
 app = FastAPI(
     title="Brain Tumor Segmentation API",
     description=(
-        "API de détection, classification et segmentation des "
-        "tumeurs cérébrales à partir d'images IRM."
+        "API de détection, classification et segmentation "
+        "des tumeurs cérébrales à partir d'images IRM."
     ),
-    version="2.0.0",
+    version="2.2.0",
 )
 
 
@@ -108,52 +144,88 @@ model = None
 
 
 def load_model():
+    """
+    Charge le modèle UNE SEULE FOIS au démarrage de FastAPI.
+    """
+
     global model
 
     logger.info("=" * 60)
     logger.info("CHARGEMENT DU MODÈLE")
     logger.info("=" * 60)
 
-    logger.info("Chemin : %s", MODEL_PATH)
-    logger.info("Existe : %s", MODEL_PATH.is_file())
+    logger.info(
+        "Chemin : %s",
+        MODEL_PATH
+    )
+
+    logger.info(
+        "Existe : %s",
+        MODEL_PATH.is_file()
+    )
 
     if not MODEL_PATH.is_file():
+
         logger.error(
             "❌ Modèle introuvable : %s",
             MODEL_PATH
         )
+
         return
 
     try:
-        model = YOLO(str(MODEL_PATH))
 
-        logger.info("✅ Modèle chargé avec succès.")
+        model = YOLO(
+            str(MODEL_PATH)
+        )
+
+        logger.info(
+            "✅ Modèle chargé avec succès."
+        )
+
         logger.info(
             "Tâche : %s",
-            getattr(model, "task", "inconnue")
-        )
-        logger.info(
-            "Classes : %s",
-            getattr(model, "names", {})
+            getattr(
+                model,
+                "task",
+                "inconnue"
+            )
         )
 
-        if getattr(model, "task", None) != "segment":
+        logger.info(
+            "Classes : %s",
+            getattr(
+                model,
+                "names",
+                {}
+            )
+        )
+
+        if getattr(
+            model,
+            "task",
+            None
+        ) != "segment":
+
             logger.warning(
-                "⚠️ Le modèle chargé n'est pas un modèle de "
-                "segmentation (task=%s) : les indicateurs basés "
-                "sur le masque ne seront pas disponibles.",
-                getattr(model, "task", "inconnue")
+                "⚠️ Le modèle chargé n'est "
+                "pas un modèle de segmentation."
             )
 
     except Exception as exc:
+
         logger.exception(
             "❌ Erreur chargement modèle : %s",
             exc
         )
+
         model = None
 
 
-# Chargement immédiat
+# ============================================================
+# CHARGEMENT AU DÉMARRAGE
+# ============================================================
+
 load_model()
 
 
@@ -169,7 +241,11 @@ def health():
         "model_loaded": model is not None,
         "model_exists": MODEL_PATH.is_file(),
         "model_path": str(MODEL_PATH),
-        "model_task": getattr(model, "task", None),
+        "model_task": getattr(
+            model,
+            "task",
+            None
+        ),
     }
 
 
@@ -177,28 +253,24 @@ def health():
 # METRICS
 # ============================================================
 
-@app.get("/metrics")
+@app.get(
+    "/metrics",
+    response_class=PlainTextResponse
+)
 def metrics():
 
     model_loaded = (
-        1 if model is not None else 0
+        1
+        if model is not None
+        else 0
     )
 
-    content = (
+    return (
         "# HELP brain_tumor_api_model_loaded "
         "Etat du modele YOLO.\n"
         "# TYPE brain_tumor_api_model_loaded gauge\n"
         f"brain_tumor_api_model_loaded "
         f"{model_loaded}\n"
-    )
-
-    return (
-        content,
-        200,
-        {
-            "Content-Type":
-                "text/plain; version=0.0.4"
-        }
     )
 
 
@@ -217,6 +289,8 @@ def read_image(raw_bytes):
         array,
         cv2.IMREAD_COLOR
     )
+
+    del array
 
     if image is None:
 
@@ -244,9 +318,13 @@ def image_to_base64(image):
             "Impossible d'encoder l'image."
         )
 
-    return base64.b64encode(
-        encoded.tobytes()
+    result = base64.b64encode(
+        encoded
     ).decode("utf-8")
+
+    del encoded
+
+    return result
 
 
 # ============================================================
@@ -264,6 +342,7 @@ def determine_position(
         image_width <= 0
         or image_height <= 0
     ):
+
         return "inconnue"
 
     x_ratio = (
@@ -274,7 +353,6 @@ def determine_position(
         center_y / image_height
     )
 
-    # Horizontal
     if x_ratio < 1 / 3:
         horizontal = "gauche"
 
@@ -284,7 +362,6 @@ def determine_position(
     else:
         horizontal = "droite"
 
-    # Vertical
     if y_ratio < 1 / 3:
         vertical = "haut"
 
@@ -294,7 +371,6 @@ def determine_position(
     else:
         vertical = "bas"
 
-    # Centre
     if (
         horizontal == "centre"
         and vertical == "centre"
@@ -316,33 +392,43 @@ def determine_position(
 # REDIMENSIONNEMENT DU MASQUE
 # ============================================================
 
-def resize_mask_to_image(mask, image_width, image_height):
-    """
-    Le masque produit par Ultralytics est à la résolution interne
-    du modèle (imgsz) : on le redimensionne à la taille réelle de
-    l'image d'origine avant tout calcul d'indicateur.
-    """
+def resize_mask_to_image(
+    mask,
+    image_width,
+    image_height
+):
 
+    # Conversion directe en masque binaire uint8.
+    # Cela évite de conserver un tableau float inutilement.
     mask_uint8 = (
-        mask * 255
-    ).astype("uint8")
+        mask > 0.5
+    ).astype(
+        np.uint8
+    )
 
     if (
         mask_uint8.shape[1] != image_width
         or mask_uint8.shape[0] != image_height
     ):
 
-        mask_uint8 = cv2.resize(
+        resized = cv2.resize(
             mask_uint8,
-            (image_width, image_height),
+            (
+                image_width,
+                image_height
+            ),
             interpolation=cv2.INTER_NEAREST
         )
+
+        del mask_uint8
+
+        mask_uint8 = resized
 
     return mask_uint8
 
 
 # ============================================================
-# INDICATEURS — À PARTIR DU MASQUE DE SEGMENTATION
+# INDICATEURS SEGMENTATION
 # ============================================================
 
 def compute_segmentation_indicators(
@@ -352,24 +438,15 @@ def compute_segmentation_indicators(
     image_height,
     pixel_spacing_mm=PIXEL_SPACING_MM
 ):
-    """
-    Calcule l'ensemble des indicateurs géométriques réels à partir
-    du masque de segmentation (et non plus de la bounding box).
-
-    Limite importante : à partir d'une unique coupe IRM 2D, seuls
-    des indicateurs de surface et de forme peuvent être calculés
-    de façon fiable. Le volume 3D réel (qui nécessiterait une pile
-    de coupes IRM successives) n'est PAS estimé ici.
-    """
 
     contours, _ = cv2.findContours(
-        mask.astype(np.uint8),
+        mask,
         cv2.RETR_EXTERNAL,
         cv2.CHAIN_APPROX_SIMPLE
     )
 
-    # Repli sur la bounding box si aucun contour n'est exploitable
     if not contours:
+
         return compute_bbox_fallback_indicators(
             box,
             image_width,
@@ -381,17 +458,18 @@ def compute_segmentation_indicators(
         key=cv2.contourArea
     )
 
-    # Surface réelle du masque
     area_px = float(
-        cv2.contourArea(largest)
+        cv2.contourArea(
+            largest
+        )
     )
 
     area_mm2 = round(
-        area_px * (pixel_spacing_mm ** 2),
+        area_px *
+        (pixel_spacing_mm ** 2),
         2
     )
 
-    # Périmètre
     perimeter_px = float(
         cv2.arcLength(
             largest,
@@ -400,12 +478,16 @@ def compute_segmentation_indicators(
     )
 
     perimeter_mm = round(
-        perimeter_px * pixel_spacing_mm,
+        perimeter_px *
+        pixel_spacing_mm,
         2
     )
 
-    # Diamètre maximal (plus grand axe du contour)
-    (_, _), radius = cv2.minEnclosingCircle(largest)
+    (_, _), radius = (
+        cv2.minEnclosingCircle(
+            largest
+        )
+    )
 
     max_diameter_px = round(
         2 * radius,
@@ -413,35 +495,57 @@ def compute_segmentation_indicators(
     )
 
     max_diameter_mm = round(
-        2 * radius * pixel_spacing_mm,
+        2 *
+        radius *
+        pixel_spacing_mm,
         2
     )
 
-    # Boîte englobante du masque (largeur / hauteur réelles)
-    x, y, width, height = cv2.boundingRect(largest)
+    x, y, width, height = (
+        cv2.boundingRect(
+            largest
+        )
+    )
 
     aspect_ratio = (
-        round(width / height, 3)
+        round(
+            width / height,
+            3
+        )
         if height > 0
         else 0
     )
 
-    # Centroïde réel du masque (pas le centre de la bbox)
-    moments = cv2.moments(largest)
-
-    center_x = (
-        moments["m10"] / moments["m00"]
-        if moments["m00"]
-        else x + width / 2
+    moments = cv2.moments(
+        largest
     )
 
-    center_y = (
-        moments["m01"] / moments["m00"]
-        if moments["m00"]
-        else y + height / 2
-    )
+    if moments["m00"]:
 
-    # Position dans l'image (basée sur le centroïde réel)
+        center_x = (
+            moments["m10"]
+            /
+            moments["m00"]
+        )
+
+        center_y = (
+            moments["m01"]
+            /
+            moments["m00"]
+        )
+
+    else:
+
+        center_x = (
+            x +
+            width / 2
+        )
+
+        center_y = (
+            y +
+            height / 2
+        )
+
     position = determine_position(
         center_x,
         center_y,
@@ -449,33 +553,45 @@ def compute_segmentation_indicators(
         image_height
     )
 
-    # Distance au centre de l'image
-    image_center_x = image_width / 2
-    image_center_y = image_height / 2
+    image_center_x = (
+        image_width / 2
+    )
+
+    image_center_y = (
+        image_height / 2
+    )
 
     distance_center = (
         (
             (center_x - image_center_x) ** 2
             +
             (center_y - image_center_y) ** 2
-        ) ** 0.5
+        )
+        ** 0.5
     )
 
-    # Occupation de l'image (surface réelle, pas la bbox)
-    image_area = image_width * image_height
+    image_area = (
+        image_width *
+        image_height
+    )
 
     occupation = (
-        area_px / image_area * 100
+        area_px /
+        image_area *
+        100
         if image_area > 0
         else 0
     )
 
-    # Circularité : indicateur de régularité de la forme
-    # (1 = cercle parfait, proche de 0 = forme très irrégulière)
     circularity = (
-        round(
-            (4 * np.pi * area_px) / (perimeter_px ** 2),
-            3
+        (
+            4 *
+            np.pi *
+            area_px
+        )
+        /
+        (
+            perimeter_px ** 2
         )
         if perimeter_px > 0
         else 0
@@ -484,8 +600,14 @@ def compute_segmentation_indicators(
     return {
 
         "centre": {
-            "x": round(center_x, 2),
-            "y": round(center_y, 2)
+            "x": round(
+                center_x,
+                2
+            ),
+            "y": round(
+                center_y,
+                2
+            )
         },
 
         "position_dans_image":
@@ -497,13 +619,19 @@ def compute_segmentation_indicators(
         },
 
         "surface_masque_px":
-            round(area_px, 2),
+            round(
+                area_px,
+                2
+            ),
 
         "surface_masque_mm2":
             area_mm2,
 
         "perimetre_px":
-            round(perimeter_px, 2),
+            round(
+                perimeter_px,
+                2
+            ),
 
         "perimetre_mm":
             perimeter_mm,
@@ -515,29 +643,36 @@ def compute_segmentation_indicators(
             max_diameter_mm,
 
         "occupation_image_pourcent":
-            round(occupation, 2),
+            round(
+                occupation,
+                2
+            ),
 
         "ratio_largeur_hauteur":
             aspect_ratio,
 
         "circularite":
-            circularity,
+            round(
+                circularity,
+                3
+            ),
 
         "distance_centre_image_px":
-            round(distance_center, 2),
+            round(
+                distance_center,
+                2
+            ),
 
         "avertissement": (
-            "Indicateurs calculés à partir du masque de segmentation "
-            "réel sur une unique coupe 2D : surface, périmètre et "
-            "diamètre sont fiables sur cette coupe, mais le volume 3D "
-            "n'est pas estimé (nécessiterait une pile de coupes IRM "
-            "successives)."
+            "Indicateurs calculés à partir du masque "
+            "de segmentation réel sur une unique coupe "
+            "2D. Le volume 3D n'est pas estimé."
         ),
     }
 
 
 # ============================================================
-# INDICATEURS — REPLI SUR LA BOUNDING BOX (si pas de masque)
+# FALLBACK BOUNDING BOX
 # ============================================================
 
 def compute_bbox_fallback_indicators(
@@ -545,56 +680,115 @@ def compute_bbox_fallback_indicators(
     image_width,
     image_height
 ):
-    """
-    Utilisé uniquement si aucun masque n'est disponible pour une
-    détection donnée (cas normalement rare avec un modèle de
-    segmentation, mais gardé par sécurité).
-    """
 
-    x1, y1, x2, y2 = map(float, box)
+    x1, y1, x2, y2 = map(
+        float,
+        box
+    )
 
-    x1 = max(0, min(x1, image_width))
-    x2 = max(0, min(x2, image_width))
-    y1 = max(0, min(y1, image_height))
-    y2 = max(0, min(y2, image_height))
+    x1 = max(
+        0,
+        min(
+            x1,
+            image_width
+        )
+    )
 
-    width = max(0, x2 - x1)
-    height = max(0, y2 - y1)
+    x2 = max(
+        0,
+        min(
+            x2,
+            image_width
+        )
+    )
 
-    center_x = (x1 + x2) / 2
-    center_y = (y1 + y2) / 2
+    y1 = max(
+        0,
+        min(
+            y1,
+            image_height
+        )
+    )
 
-    bbox_area = width * height
-    image_area = image_width * image_height
+    y2 = max(
+        0,
+        min(
+            y2,
+            image_height
+        )
+    )
+
+    width = max(
+        0,
+        x2 - x1
+    )
+
+    height = max(
+        0,
+        y2 - y1
+    )
+
+    center_x = (
+        x1 + x2
+    ) / 2
+
+    center_y = (
+        y1 + y2
+    ) / 2
+
+    bbox_area = (
+        width *
+        height
+    )
+
+    image_area = (
+        image_width *
+        image_height
+    )
 
     occupation = (
-        bbox_area / image_area * 100
+        bbox_area /
+        image_area *
+        100
         if image_area > 0
         else 0
     )
 
     aspect_ratio = (
-        round(width / height, 3)
+        round(
+            width / height,
+            3
+        )
         if height > 0
         else 0
     )
 
-    image_center_x = image_width / 2
-    image_center_y = image_height / 2
-
     distance_center = (
         (
-            (center_x - image_center_x) ** 2
+            (
+                center_x -
+                image_width / 2
+            ) ** 2
             +
-            (center_y - image_center_y) ** 2
-        ) ** 0.5
+            (
+                center_y -
+                image_height / 2
+            ) ** 2
+        )
+        ** 0.5
     )
 
     return {
 
         "centre": {
-            "x": round(center_x, 2),
-            "y": round(center_y, 2)
+            "x": round(
+                center_x,
+                2
+            ),
+            "y": round(
+                center_y,
+                2
+            )
         },
 
         "position_dans_image":
@@ -606,33 +800,49 @@ def compute_bbox_fallback_indicators(
             ),
 
         "dimensions_px": {
-            "largeur": round(width, 2),
-            "hauteur": round(height, 2)
+            "largeur":
+                round(
+                    width,
+                    2
+                ),
+            "hauteur":
+                round(
+                    height,
+                    2
+                )
         },
 
         "surface_bounding_box_px":
-            round(bbox_area, 2),
+            round(
+                bbox_area,
+                2
+            ),
 
         "occupation_image_pourcent":
-            round(occupation, 2),
+            round(
+                occupation,
+                2
+            ),
 
         "ratio_largeur_hauteur":
             aspect_ratio,
 
         "distance_centre_image_px":
-            round(distance_center, 2),
+            round(
+                distance_center,
+                2
+            ),
 
         "avertissement": (
-            "Aucun masque de segmentation disponible pour cette "
-            "détection : ces indicateurs sont calculés à partir de "
-            "la bounding box et ne reflètent pas le contour réel "
-            "de la tumeur."
+            "Aucun masque de segmentation disponible "
+            "pour cette détection. Les indicateurs "
+            "sont calculés à partir de la bounding box."
         ),
     }
 
 
 # ============================================================
-# DESSIN
+# DESSIN OPTIMISÉ
 # ============================================================
 
 def draw_detection(
@@ -641,24 +851,55 @@ def draw_detection(
     mask,
     class_name,
     confidence,
-    color=(0, 0, 255)
+    color
 ):
+
+    # --------------------------------------------------------
+    # MASQUE
+    # --------------------------------------------------------
 
     if mask is not None:
 
-        overlay = image.copy()
-        overlay[mask > 0] = color
-
-        image = cv2.addWeighted(
-            overlay,
-            0.35,
-            image,
-            0.65,
-            0
+        selected = (
+            mask > 0
         )
 
+        if np.any(selected):
+
+            original_pixels = (
+                image[selected]
+                .astype(
+                    np.float32
+                )
+            )
+
+            color_array = np.asarray(
+                color,
+                dtype=np.float32
+            )
+
+            blended = (
+                original_pixels *
+                0.65
+                +
+                color_array *
+                0.35
+            )
+
+            image[selected] = np.clip(
+                blended,
+                0,
+                255
+            ).astype(
+                np.uint8
+            )
+
+            del original_pixels
+            del blended
+            del color_array
+
         contours, _ = cv2.findContours(
-            mask.astype(np.uint8),
+            mask,
             cv2.RETR_EXTERNAL,
             cv2.CHAIN_APPROX_SIMPLE
         )
@@ -670,6 +911,13 @@ def draw_detection(
             color,
             2
         )
+
+        del contours
+        del selected
+
+    # --------------------------------------------------------
+    # BOUNDING BOX
+    # --------------------------------------------------------
 
     x1, y1, x2, y2 = map(
         int,
@@ -706,8 +954,6 @@ def draw_detection(
         cv2.LINE_AA
     )
 
-    return image
-
 
 # ============================================================
 # PREDICTION
@@ -720,160 +966,499 @@ async def predict(
 
     start_time = time.perf_counter()
 
-    # ========================================================
-    # 1. FORMAT
-    # ========================================================
-
-    if (
-        file.content_type
-        not in ALLOWED_CONTENT_TYPES
-    ):
-
-        raise HTTPException(
-            status_code=415,
-            detail=(
-                "Fichier non conforme. "
-                "Formats acceptés : "
-                "JPEG et PNG."
-            )
-        )
-
-    # ========================================================
-    # 2. LECTURE
-    # ========================================================
-
-    raw_bytes = await file.read()
-
-    if not raw_bytes:
-
-        raise HTTPException(
-            status_code=400,
-            detail="Le fichier est vide."
-        )
-
-    # ========================================================
-    # 3. TAILLE
-    # ========================================================
-
-    size_mb = (
-        len(raw_bytes)
-        / (1024 * 1024)
-    )
-
-    if size_mb > MAX_FILE_SIZE_MB:
-
-        raise HTTPException(
-            status_code=413,
-            detail=(
-                f"Fichier trop volumineux "
-                f"({size_mb:.1f} Mo). "
-                f"Taille maximale : "
-                f"{MAX_FILE_SIZE_MB} Mo."
-            )
-        )
-
-    # ========================================================
-    # 4. DÉCODAGE
-    # ========================================================
+    image = None
+    results = None
+    result = None
+    annotated = None
 
     try:
 
-        image = read_image(
-            raw_bytes
+        # ====================================================
+        # 1. FORMAT
+        # ====================================================
+
+        if (
+            file.content_type
+            not in ALLOWED_CONTENT_TYPES
+        ):
+
+            raise HTTPException(
+                status_code=415,
+                detail=(
+                    "Fichier non conforme. "
+                    "Formats acceptés : JPEG et PNG."
+                )
+            )
+
+        # ====================================================
+        # 2. LECTURE
+        # ====================================================
+
+        raw_bytes = await file.read()
+
+        if not raw_bytes:
+
+            raise HTTPException(
+                status_code=400,
+                detail="Le fichier est vide."
+            )
+
+        # ====================================================
+        # 3. TAILLE
+        # ====================================================
+
+        size_mb = (
+            len(raw_bytes)
+            /
+            (1024 * 1024)
         )
 
-    except Exception:
+        if size_mb > MAX_FILE_SIZE_MB:
 
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Image non conforme "
-                "ou fichier corrompu."
+            del raw_bytes
+
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Fichier trop volumineux "
+                    f"({size_mb:.1f} Mo). "
+                    f"Taille maximale : "
+                    f"{MAX_FILE_SIZE_MB} Mo."
+                )
+            )
+
+        # ====================================================
+        # 4. DÉCODAGE
+        # ====================================================
+
+        try:
+
+            image = read_image(
+                raw_bytes
+            )
+
+        except Exception:
+
+            del raw_bytes
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Image non conforme "
+                    "ou fichier corrompu."
+                )
+            )
+
+        # Le fichier binaire original n'est plus nécessaire.
+        del raw_bytes
+
+        # ====================================================
+        # 5. MODÈLE
+        # ====================================================
+
+        if model is None:
+
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Le modèle d'IA n'est "
+                    "actuellement pas disponible."
+                )
+            )
+
+        # ====================================================
+        # 6. DIMENSIONS
+        # ====================================================
+
+        image_height, image_width = (
+            image.shape[:2]
+        )
+
+        # ====================================================
+        # 7. INFÉRENCE OPTIMISÉE
+        # ====================================================
+
+        try:
+
+            # Pas de calcul de gradients.
+            # Appel direct du modèle au lieu de model.predict().
+            with torch.inference_mode():
+
+                results = model(
+                    source=image,
+                    conf=CONFIDENCE_THRESHOLD,
+                    imgsz=640,
+                    verbose=False
+                )
+
+        except Exception:
+
+            logger.exception(
+                "Erreur pendant la prédiction."
+            )
+
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Une erreur interne est "
+                    "survenue pendant l'analyse."
+                )
+            )
+
+        if not results:
+
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Le modèle n'a retourné "
+                    "aucun résultat."
+                )
+            )
+
+        result = results[0]
+
+        # ====================================================
+        # 8. AUCUNE TUMEUR
+        # ====================================================
+
+        if (
+            result.boxes is None
+            or len(result.boxes) == 0
+        ):
+
+            elapsed = (
+                time.perf_counter()
+                -
+                start_time
+            )
+
+            logger.info(
+                "Aucune tumeur détectée."
+            )
+
+            encoded_image = (
+                image_to_base64(
+                    image
+                )
+            )
+
+            response = {
+
+                "avertissement":
+                    DISCLAIMER,
+
+                "tumeur_detectee":
+                    False,
+
+                "nombre_tumeurs":
+                    0,
+
+                "detections":
+                    [],
+
+                "image_dimensions": {
+                    "largeur":
+                        image_width,
+                    "hauteur":
+                        image_height
+                },
+
+                "image_annotee_base64":
+                    encoded_image,
+
+                "temps_traitement_s":
+                    round(
+                        elapsed,
+                        3
+                    )
+            }
+
+            # Les résultats YOLO ne sont plus nécessaires.
+            del result
+            result = None
+
+            del results
+            results = None
+
+            return response
+
+        # ====================================================
+        # 9. DÉTECTIONS
+        # ====================================================
+
+        detections = []
+
+        # Une seule copie pour l'image annotée.
+        annotated = image.copy()
+
+        has_masks = (
+            result.masks is not None
+            and result.masks.data is not None
+            and len(result.masks.data) > 0
+        )
+
+        colors = [
+            (0, 0, 255),
+            (255, 128, 0),
+            (0, 200, 100),
+            (200, 0, 200),
+        ]
+
+        number_detections = len(
+            result.boxes
+        )
+
+        for index in range(
+            number_detections
+        ):
+
+            # ------------------------------------------------
+            # BOX
+            # ------------------------------------------------
+
+            box = (
+                result
+                .boxes
+                .xyxy[index]
+                .detach()
+                .cpu()
+                .tolist()
+            )
+
+            # ------------------------------------------------
+            # CLASSE
+            # ------------------------------------------------
+
+            class_id = int(
+                result
+                .boxes
+                .cls[index]
+                .item()
+            )
+
+            class_name = (
+                model.names.get(
+                    class_id,
+                    f"Classe {class_id}"
+                )
+            )
+
+            # ------------------------------------------------
+            # CONFIANCE
+            # ------------------------------------------------
+
+            confidence = float(
+                result
+                .boxes
+                .conf[index]
+                .item()
+            )
+
+            color = colors[
+                index %
+                len(colors)
+            ]
+
+            # ------------------------------------------------
+            # MASQUE
+            # ------------------------------------------------
+
+            mask_resized = None
+
+            if (
+                has_masks
+                and
+                index <
+                len(result.masks.data)
+            ):
+
+                raw_mask = (
+                    result
+                    .masks
+                    .data[index]
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+
+                mask_resized = (
+                    resize_mask_to_image(
+                        raw_mask,
+                        image_width,
+                        image_height
+                    )
+                )
+
+                del raw_mask
+
+                indicators = (
+                    compute_segmentation_indicators(
+                        mask_resized,
+                        box,
+                        image_width,
+                        image_height
+                    )
+                )
+
+            else:
+
+                indicators = (
+                    compute_bbox_fallback_indicators(
+                        box,
+                        image_width,
+                        image_height
+                    )
+                )
+
+            # ------------------------------------------------
+            # DÉTECTION
+            # ------------------------------------------------
+
+            detection = {
+
+                "id":
+                    index + 1,
+
+                "classe":
+                    class_name,
+
+                "classe_id":
+                    class_id,
+
+                "confiance":
+                    round(
+                        confidence,
+                        3
+                    ),
+
+                "boite_englobante": {
+                    "x1":
+                        round(
+                            box[0],
+                            2
+                        ),
+                    "y1":
+                        round(
+                            box[1],
+                            2
+                        ),
+                    "x2":
+                        round(
+                            box[2],
+                            2
+                        ),
+                    "y2":
+                        round(
+                            box[3],
+                            2
+                        )
+                },
+
+                "masque_disponible":
+                    mask_resized is not None,
+
+                "indicateurs":
+                    indicators
+            }
+
+            detections.append(
+                detection
+            )
+
+            # ------------------------------------------------
+            # ANNOTATION
+            # ------------------------------------------------
+
+            draw_detection(
+                annotated,
+                box,
+                mask_resized,
+                class_name,
+                confidence,
+                color
+            )
+
+            # Le masque ne sert plus.
+            del mask_resized
+
+        # ====================================================
+        # 10. MEILLEURE DÉTECTION
+        # ====================================================
+
+        best_detection = max(
+            detections,
+            key=lambda x:
+                x["confiance"]
+        )
+
+        # ====================================================
+        # 11. ENCODAGE
+        # ====================================================
+
+        encoded_image = (
+            image_to_base64(
+                annotated
             )
         )
 
-    # ========================================================
-    # 5. MODÈLE
-    # ========================================================
-
-    if model is None:
-
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Le modèle d'IA n'est "
-                "actuellement pas disponible."
-            )
-        )
-
-    # ========================================================
-    # 6. DIMENSIONS
-    # ========================================================
-
-    image_height, image_width = (
-        image.shape[:2]
-    )
-
-    # ========================================================
-    # 7. PRÉDICTION
-    # ========================================================
-
-    try:
-
-        results = model.predict(
-            source=image,
-            conf=CONFIDENCE_THRESHOLD,
-            imgsz=640,
-            verbose=False
-        )
-
-    except Exception:
-
-        logger.exception(
-            "Erreur pendant la prédiction."
-        )
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Une erreur interne est "
-                "survenue pendant l'analyse."
-            )
-        )
-
-    result = results[0]
-
-    # ========================================================
-    # 8. AUCUNE TUMEUR
-    # ========================================================
-
-    if (
-        result.boxes is None
-        or len(result.boxes) == 0
-    ):
+        # ====================================================
+        # 12. TEMPS
+        # ====================================================
 
         elapsed = (
             time.perf_counter()
-            - start_time
+            -
+            start_time
         )
+
+        # ====================================================
+        # 13. LOG
+        # ====================================================
 
         logger.info(
-            "Aucune tumeur détectée."
+            "Détection : %d | "
+            "classe=%s | "
+            "confiance=%.3f | "
+            "masque=%s | "
+            "temps=%.3fs",
+
+            len(detections),
+
+            best_detection[
+                "classe"
+            ],
+
+            best_detection[
+                "confiance"
+            ],
+
+            best_detection[
+                "masque_disponible"
+            ],
+
+            elapsed
         )
 
-        return {
+        # ====================================================
+        # 14. RÉPONSE
+        # ====================================================
+
+        response = {
 
             "avertissement":
                 DISCLAIMER,
 
             "tumeur_detectee":
-                False,
+                True,
 
             "nombre_tumeurs":
-                0,
+                len(detections),
+
+            "meilleure_detection":
+                best_detection,
 
             "detections":
-                [],
+                detections,
 
             "image_dimensions": {
                 "largeur":
@@ -883,9 +1468,7 @@ async def predict(
             },
 
             "image_annotee_base64":
-                image_to_base64(
-                    image
-                ),
+                encoded_image,
 
             "temps_traitement_s":
                 round(
@@ -894,226 +1477,39 @@ async def predict(
                 )
         }
 
-    # ========================================================
-    # 9. DÉTECTIONS
-    # ========================================================
+        # ====================================================
+        # LIBÉRATION ANTICIPÉE
+        # ====================================================
 
-    detections = []
+        # La réponse contient déjà toutes les informations
+        # nécessaires. Les objets YOLO temporaires peuvent
+        # maintenant être supprimés avant le return.
 
-    annotated = image.copy()
+        del result
+        result = None
 
-    has_masks = (
-        result.masks is not None
-        and len(result.masks.data) > 0
-    )
+        del results
+        results = None
 
-    colors = [
-        (0, 0, 255),
-        (255, 128, 0),
-        (0, 200, 100),
-        (200, 0, 200),
-    ]
+        return response
 
-    for index in range(
-        len(result.boxes)
-    ):
+    finally:
 
-        # Bounding box
-        box = (
-            result
-            .boxes
-            .xyxy[index]
-            .tolist()
-        )
+        # ====================================================
+        # NETTOYAGE MÉMOIRE
+        # ====================================================
 
-        # Classe
-        class_id = int(
-            result
-            .boxes
-            .cls[index]
-        )
+        if results is not None:
+            del results
 
-        class_name = (
-            model.names.get(
-                class_id,
-                f"Classe {class_id}"
-            )
-        )
+        if result is not None:
+            del result
 
-        # Confiance
-        confidence = float(
-            result
-            .boxes
-            .conf[index]
-        )
+        if annotated is not None:
+            del annotated
 
-        color = colors[
-            index % len(colors)
-        ]
+        if image is not None:
+            del image
 
-        # ----------------------------------------------------
-        # Masque de segmentation (si disponible pour cet index)
-        # ----------------------------------------------------
-
-        mask_resized = None
-        indicators = None
-
-        if (
-            has_masks
-            and index < len(result.masks.data)
-        ):
-
-            raw_mask = (
-                result
-                .masks
-                .data[index]
-                .cpu()
-                .numpy()
-            )
-
-            mask_resized = resize_mask_to_image(
-                raw_mask,
-                image_width,
-                image_height
-            )
-
-            indicators = compute_segmentation_indicators(
-                mask_resized,
-                box,
-                image_width,
-                image_height
-            )
-
-        else:
-
-            indicators = compute_bbox_fallback_indicators(
-                box,
-                image_width,
-                image_height
-            )
-
-        # Détection
-        detection = {
-
-            "id":
-                index + 1,
-
-            "classe":
-                class_name,
-
-            "classe_id":
-                class_id,
-
-            "confiance":
-                round(
-                    confidence,
-                    3
-                ),
-
-            "boite_englobante": {
-                "x1":
-                    round(box[0], 2),
-                "y1":
-                    round(box[1], 2),
-                "x2":
-                    round(box[2], 2),
-                "y2":
-                    round(box[3], 2)
-            },
-
-            "masque_disponible":
-                mask_resized is not None,
-
-            "indicateurs":
-                indicators
-        }
-
-        detections.append(
-            detection
-        )
-
-        # Annotation
-        annotated = draw_detection(
-            annotated,
-            box,
-            mask_resized,
-            class_name,
-            confidence,
-            color
-        )
-
-    # ========================================================
-    # 10. MEILLEURE DÉTECTION
-    # ========================================================
-
-    best_detection = max(
-        detections,
-        key=lambda x:
-            x["confiance"]
-    )
-
-    # ========================================================
-    # 11. TEMPS
-    # ========================================================
-
-    elapsed = (
-        time.perf_counter()
-        - start_time
-    )
-
-    # ========================================================
-    # 12. LOG
-    # ========================================================
-
-    logger.info(
-        "Détection : %d | "
-        "classe=%s | "
-        "confiance=%.3f | "
-        "masque=%s | "
-        "temps=%.3fs",
-        len(detections),
-        best_detection["classe"],
-        best_detection["confiance"],
-        best_detection["masque_disponible"],
-        elapsed
-    )
-
-    # ========================================================
-    # 13. RÉPONSE
-    # ========================================================
-
-    return {
-
-        "avertissement":
-            DISCLAIMER,
-
-        "tumeur_detectee":
-            True,
-
-        "nombre_tumeurs":
-            len(detections),
-
-        "meilleure_detection":
-            best_detection,
-
-        "detections":
-            detections,
-
-        "image_dimensions": {
-            "largeur":
-                image_width,
-            "hauteur":
-                image_height
-        },
-
-        "image_annotee_base64":
-            image_to_base64(
-                annotated
-            ),
-
-        "temps_traitement_s":
-            round(
-                elapsed,
-                3
-            )
-    }
+        # Nettoyage du garbage collector Python.
+        gc.collect()

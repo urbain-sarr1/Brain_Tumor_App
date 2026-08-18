@@ -1,32 +1,18 @@
 """
-Interface Streamlit de détection, classification et segmentation
-de tumeurs cérébrales à partir d'images IRM.
+Interface Streamlit - Brain Tumor App
 
-Architecture :
-    Streamlit
-        ↓
-    API FastAPI /predict
-        ↓
-    YOLO11m-seg
-        ↓
-    Détection + classification + segmentation
-        ↓
-    Indicateurs géométriques
-        ↓
-    Résultats affichés dans Streamlit
+L'interface ne charge PAS le modèle YOLO.
+Elle communique uniquement avec l'API FastAPI.
 
-IMPORTANT :
-    Cette application est un outil d'aide à la décision.
-    Elle ne constitue pas un diagnostic médical.
+API attendue :
+    POST /predict
 """
 
-import base64
 import os
-from io import BytesIO
+import base64
 
 import requests
 import streamlit as st
-from PIL import Image
 
 
 # ============================================================
@@ -35,8 +21,10 @@ from PIL import Image
 
 API_URL = os.getenv(
     "API_URL",
-    "http://localhost:8000"
-)
+    "http://127.0.0.1:8000"
+).rstrip("/")
+
+PREDICT_URL = f"{API_URL}/predict"
 
 MAX_FILE_SIZE_MB = 10
 
@@ -52,57 +40,53 @@ ALLOWED_TYPES = [
 # ============================================================
 
 st.set_page_config(
-    page_title="Détection des tumeurs cérébrales",
+    page_title="Brain Tumor App",
     page_icon="🧠",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 
 # ============================================================
-# STYLE
+# SUPPRESSION DE LA SIDEBAR
 # ============================================================
 
 st.markdown(
     """
     <style>
 
-    .main-title {
-        font-size: 2.2rem;
-        font-weight: 700;
-        margin-bottom: 0.2rem;
+    /* Supprime complètement la sidebar */
+    [data-testid="stSidebar"] {
+        display: none;
     }
 
-    .subtitle {
-        color: #666;
-        font-size: 1rem;
-        margin-bottom: 1.5rem;
+    /* Supprime l'espace réservé à la sidebar */
+    [data-testid="stSidebarCollapsedControl"] {
+        display: none;
+    }
+
+    /* Réduit légèrement les marges */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+        padding-left: 3rem;
+        padding-right: 3rem;
+    }
+
+    /* Style des informations */
+    .info-box {
+        padding: 1rem;
+        border-radius: 10px;
+        border: 1px solid #ddd;
+        margin-bottom: 1rem;
     }
 
     .warning-box {
         padding: 1rem;
-        border-radius: 8px;
+        border-radius: 10px;
         background-color: #fff3cd;
-        border: 1px solid #ffeeba;
-        color: #856404;
-        margin-bottom: 1.5rem;
-    }
-
-    .success-box {
-        padding: 1rem;
-        border-radius: 8px;
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        color: #155724;
-        margin-bottom: 1rem;
-    }
-
-    .danger-box {
-        padding: 1rem;
-        border-radius: 8px;
-        background-color: #f8d7da;
-        border: 1px solid #f5c6cb;
-        color: #721c24;
+        border: 1px solid #ffe69c;
+        margin-top: 1rem;
         margin-bottom: 1rem;
     }
 
@@ -116,827 +100,768 @@ st.markdown(
 # TITRE
 # ============================================================
 
-st.markdown(
-    '<div class="main-title">🧠 Détection des tumeurs cérébrales</div>',
-    unsafe_allow_html=True
-)
+st.title("🧠 Détection et segmentation des tumeurs cérébrales")
 
 st.markdown(
     """
-    <div class="subtitle">
-        Détection, classification et segmentation automatique
-        à partir d'images IRM.
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# ============================================================
-# AVERTISSEMENT MÉDICAL
-# ============================================================
-
-st.markdown(
+    Cette application permet d'analyser une image IRM cérébrale
+    à l'aide d'un modèle d'intelligence artificielle spécialisé
+    dans la détection, la classification et la segmentation
+    des tumeurs.
     """
-    <div class="warning-box">
-        <strong>⚠️ Avertissement médical</strong><br>
-        Cette application est un outil d'aide à la décision.
-        Elle ne remplace pas l'interprétation d'un professionnel
-        de santé qualifié.
-    </div>
-    """,
-    unsafe_allow_html=True
 )
 
 
 # ============================================================
-# SIDEBAR
+# AVERTISSEMENT
 # ============================================================
 
-with st.sidebar:
+st.warning(
+    "⚠️ Cet outil constitue une aide à l'analyse et ne remplace "
+    "pas l'interprétation d'un professionnel de santé."
+)
 
-    st.header("⚙️ Configuration")
 
-    st.write("**API FastAPI**")
+# ============================================================
+# VÉRIFICATION API
+# ============================================================
 
-    st.code(
-        API_URL,
-        language="text"
-    )
-
-    st.divider()
-
-    st.write("**Modèle**")
-
-    st.write("YOLO11m-seg")
+with st.expander("🔧 État du service", expanded=False):
 
     st.write(
-        "Détection + classification + segmentation"
+        f"**API :** `{API_URL}`"
     )
 
-    st.divider()
+    if st.button(
+        "Tester la connexion à l'API",
+        use_container_width=True
+    ):
 
-    st.write("**Formats acceptés**")
+        try:
 
-    st.write("JPEG / JPG / PNG")
+            response = requests.get(
+                f"{API_URL}/health",
+                timeout=10
+            )
 
-    st.write(
-        f"Taille maximale : {MAX_FILE_SIZE_MB} Mo"
-    )
+            if response.status_code == 200:
 
-    st.divider()
+                health = response.json()
 
-    # --------------------------------------------------------
-    # Vérification API
-    # --------------------------------------------------------
+                if health.get("model_loaded"):
 
-    st.subheader("🔌 État de l'API")
+                    st.success(
+                        "✅ API disponible et modèle chargé."
+                    )
 
-    try:
+                else:
 
-        health_response = requests.get(
-            f"{API_URL}/health",
-            timeout=5
-        )
-
-        if health_response.status_code == 200:
-
-            health = health_response.json()
-
-            if health.get("model_loaded"):
-
-                st.success(
-                    "API disponible\n\n"
-                    "Modèle chargé"
-                )
+                    st.warning(
+                        "⚠️ API disponible mais modèle non chargé."
+                    )
 
             else:
 
-                st.warning(
-                    "API disponible\n\n"
-                    "Modèle non chargé"
+                st.error(
+                    f"❌ API inaccessible : "
+                    f"HTTP {response.status_code}"
                 )
 
-        else:
+        except requests.RequestException as exc:
 
             st.error(
-                f"API indisponible "
-                f"({health_response.status_code})"
+                f"❌ Impossible de contacter l'API : {exc}"
             )
-
-    except requests.exceptions.RequestException:
-
-        st.error(
-            "Impossible de contacter l'API"
-        )
 
 
 # ============================================================
 # UPLOAD IMAGE
 # ============================================================
 
-st.subheader("📤 Importer une image IRM")
+st.subheader("📤 Sélectionner une image IRM")
 
 uploaded_file = st.file_uploader(
-    "Sélectionnez une image IRM",
+    "Choisissez une image à analyser",
     type=ALLOWED_TYPES,
+    accept_multiple_files=False,
     help=(
-        "Formats acceptés : JPG, JPEG et PNG. "
+        f"Formats acceptés : JPG, JPEG et PNG. "
         f"Taille maximale : {MAX_FILE_SIZE_MB} Mo."
     )
 )
 
 
 # ============================================================
-# SI IMAGE FOURNIE
+# SI AUCUNE IMAGE
 # ============================================================
 
-if uploaded_file is not None:
+if uploaded_file is None:
 
-    # --------------------------------------------------------
-    # Vérification taille
-    # --------------------------------------------------------
-
-    file_size_mb = (
-        uploaded_file.size
-        / (1024 * 1024)
+    st.info(
+        "👆 Sélectionnez une image IRM puis cliquez sur "
+        "**Analyser l'image**."
     )
 
-    if file_size_mb > MAX_FILE_SIZE_MB:
+    st.stop()
 
-        st.error(
-            f"❌ Image trop volumineuse : "
-            f"{file_size_mb:.2f} Mo. "
-            f"Maximum autorisé : "
-            f"{MAX_FILE_SIZE_MB} Mo."
-        )
 
-        st.stop()
+# ============================================================
+# CONTRÔLE TAILLE
+# ============================================================
+
+file_size_mb = (
+    uploaded_file.size
+    / (1024 * 1024)
+)
+
+if file_size_mb > MAX_FILE_SIZE_MB:
+
+    st.error(
+        f"❌ L'image fait {file_size_mb:.2f} Mo. "
+        f"La taille maximale autorisée est de "
+        f"{MAX_FILE_SIZE_MB} Mo."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# AFFICHAGE IMAGE AVANT ANALYSE
+# ============================================================
+
+st.subheader("🖼️ Image sélectionnée")
+
+col_image, col_info = st.columns(
+    [2, 1]
+)
+
+with col_image:
+
+    st.image(
+        uploaded_file,
+        caption="Image IRM sélectionnée",
+        use_container_width=True
+    )
+
+with col_info:
+
+    st.markdown(
+        """
+        <div class="info-box">
+
+        <strong>Informations du fichier</strong>
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.write(
+        f"**Nom :** {uploaded_file.name}"
+    )
+
+    st.write(
+        f"**Type :** {uploaded_file.type}"
+    )
+
+    st.write(
+        f"**Taille :** {file_size_mb:.2f} Mo"
+    )
+
+
+# ============================================================
+# BOUTON ANALYSE
+# ============================================================
+
+st.divider()
+
+analyze = st.button(
+    "🔍 Analyser l'image",
+    type="primary",
+    use_container_width=True
+)
+
+
+# ============================================================
+# ANALYSE
+# ============================================================
+
+if analyze:
 
     # --------------------------------------------------------
-    # Lecture image
+    # Lecture des bytes
     # --------------------------------------------------------
 
     try:
 
-        image = Image.open(
-            uploaded_file
-        )
+        file_bytes = uploaded_file.getvalue()
 
-        image.load()
-
-    except Exception:
+    except Exception as exc:
 
         st.error(
-            "❌ Impossible de lire cette image."
+            f"❌ Impossible de lire l'image : {exc}"
         )
 
         st.stop()
 
+
     # --------------------------------------------------------
-    # Affichage image originale
+    # Appel API
     # --------------------------------------------------------
 
-    st.subheader("🖼️ Image IRM sélectionnée")
-
-    col1, col2 = st.columns(
-        [2, 1]
-    )
-
-    with col1:
-
-        st.image(
-            image,
-            caption="Image IRM originale",
-            use_column_width=True
-        )
-
-    with col2:
-
-        st.info(
-            f"""
-            **Nom :** {uploaded_file.name}
-
-            **Format :** {uploaded_file.type}
-
-            **Taille :** {file_size_mb:.2f} Mo
-
-            **Dimensions :**
-            {image.width} × {image.height} px
-            """
-        )
-
-    st.divider()
-
-    # ========================================================
-    # BOUTON ANALYSE
-    # ========================================================
-
-    if st.button(
-        "🔍 Analyser l'image",
-        type="primary",
-        use_container_width=True
+    with st.spinner(
+        "🧠 Analyse de l'image en cours..."
     ):
-
-        # ----------------------------------------------------
-        # Préparation du fichier
-        # ----------------------------------------------------
-
-        file_bytes = uploaded_file.getvalue()
-
-        files = {
-            "file": (
-                uploaded_file.name,
-                file_bytes,
-                uploaded_file.type
-            )
-        }
-
-        # ----------------------------------------------------
-        # Appel API
-        # ----------------------------------------------------
-
-        with st.spinner(
-            "🧠 Analyse de l'image par le modèle YOLO11m-seg..."
-        ):
-
-            try:
-
-                response = requests.post(
-                    f"{API_URL}/predict",
-                    files=files,
-                    timeout=120
-                )
-
-            except requests.exceptions.Timeout:
-
-                st.error(
-                    "⏱️ L'analyse a dépassé le délai d'attente."
-                )
-
-                st.stop()
-
-            except requests.exceptions.ConnectionError:
-
-                st.error(
-                    "🔌 Impossible de contacter l'API FastAPI."
-                )
-
-                st.info(
-                    f"URL utilisée : {API_URL}"
-                )
-
-                st.stop()
-
-            except requests.exceptions.RequestException as exc:
-
-                st.error(
-                    f"❌ Erreur de communication avec l'API : {exc}"
-                )
-
-                st.stop()
-
-        # ----------------------------------------------------
-        # Vérification réponse
-        # ----------------------------------------------------
-
-        if response.status_code != 200:
-
-            try:
-
-                error_data = response.json()
-
-                detail = error_data.get(
-                    "detail",
-                    "Erreur inconnue"
-                )
-
-            except Exception:
-
-                detail = response.text
-
-            st.error(
-                f"❌ Erreur API "
-                f"({response.status_code}) : {detail}"
-            )
-
-            st.stop()
-
-        # ----------------------------------------------------
-        # Lecture JSON
-        # ----------------------------------------------------
 
         try:
 
-            result = response.json()
+            response = requests.post(
+                PREDICT_URL,
+                files={
+                    "file": (
+                        uploaded_file.name,
+                        file_bytes,
+                        uploaded_file.type
+                    )
+                },
+                timeout=120
+            )
 
-        except Exception:
+        except requests.Timeout:
 
             st.error(
-                "❌ La réponse de l'API n'est pas un JSON valide."
+                "⏱️ L'analyse a dépassé le délai d'attente. "
+                "L'API est peut-être en cours de démarrage."
             )
 
             st.stop()
 
-        # ====================================================
-        # RÉSULTATS
-        # ====================================================
+        except requests.ConnectionError:
 
-        st.divider()
-
-        st.header("📊 Résultats de l'analyse")
-
-        # ----------------------------------------------------
-        # Avertissement API
-        # ----------------------------------------------------
-
-        if result.get("avertissement"):
-
-            st.warning(
-                result["avertissement"]
+            st.error(
+                "❌ Impossible de contacter l'API FastAPI."
             )
-
-        # ----------------------------------------------------
-        # AUCUNE TUMEUR
-        # ----------------------------------------------------
-
-        if not result.get(
-            "tumeur_detectee",
-            False
-        ):
-
-            st.success(
-                "✅ Aucune tumeur détectée."
-            )
-
-            st.metric(
-                "Nombre de tumeurs détectées",
-                0
-            )
-
-            image_base64 = result.get(
-                "image_annotee_base64"
-            )
-
-            if image_base64:
-
-                try:
-
-                    image_bytes = base64.b64decode(
-                        image_base64
-                    )
-
-                    result_image = Image.open(
-                        BytesIO(image_bytes)
-                    )
-
-                    st.image(
-                        result_image,
-                        caption="Résultat de l'analyse",
-                        use_column_width=True
-                    )
-
-                except Exception:
-
-                    st.warning(
-                        "Impossible d'afficher l'image retournée par l'API."
-                    )
 
             st.info(
-                f"Temps de traitement : "
-                f"{result.get('temps_traitement_s', 0)} s"
+                f"API utilisée : {PREDICT_URL}"
             )
 
             st.stop()
 
-        # ====================================================
-        # AU MOINS UNE TUMEUR
-        # ====================================================
+        except requests.RequestException as exc:
 
-        nombre_tumeurs = result.get(
-            "nombre_tumeurs",
+            st.error(
+                f"❌ Erreur de communication avec l'API : {exc}"
+            )
+
+            st.stop()
+
+
+    # --------------------------------------------------------
+    # Gestion des erreurs HTTP
+    # --------------------------------------------------------
+
+    if response.status_code != 200:
+
+        if response.status_code == 413:
+
+            st.error(
+                "❌ Image trop volumineuse."
+            )
+
+        elif response.status_code == 415:
+
+            st.error(
+                "❌ Format d'image non accepté."
+            )
+
+        elif response.status_code == 403:
+
+            st.error(
+                "❌ API refusée (HTTP 403)."
+            )
+
+            st.info(
+                "Vérifiez l'URL API utilisée par Streamlit "
+                "et la configuration du service Render."
+            )
+
+        elif response.status_code == 503:
+
+            st.error(
+                "❌ Le modèle IA n'est actuellement pas disponible."
+            )
+
+        elif response.status_code == 500:
+
+            st.error(
+                "❌ Erreur interne pendant l'analyse."
+            )
+
+        else:
+
+            st.error(
+                f"❌ Erreur API : HTTP {response.status_code}"
+            )
+
+        # Essaye de récupérer le détail fourni par FastAPI
+        try:
+
+            error_data = response.json()
+
+            if isinstance(error_data, dict):
+
+                detail = error_data.get("detail")
+
+                if detail:
+                    st.caption(
+                        f"Détail : {detail}"
+                    )
+
+        except Exception:
+            pass
+
+        st.stop()
+
+
+    # --------------------------------------------------------
+    # Lecture JSON
+    # --------------------------------------------------------
+
+    try:
+
+        result = response.json()
+
+    except Exception:
+
+        st.error(
+            "❌ La réponse de l'API n'est pas un JSON valide."
+        )
+
+        st.stop()
+
+
+    # ========================================================
+    # RÉSULTATS
+    # ========================================================
+
+    st.divider()
+
+    st.subheader("📊 Résultats de l'analyse")
+
+
+    tumor_detected = result.get(
+        "tumeur_detectee",
+        False
+    )
+
+    number_tumors = result.get(
+        "nombre_tumeurs",
+        0
+    )
+
+    processing_time = result.get(
+        "temps_traitement_s"
+    )
+
+
+    # ========================================================
+    # RÉSULTAT PRINCIPAL
+    # ========================================================
+
+    if tumor_detected:
+
+        st.error(
+            f"🔴 Tumeur détectée — "
+            f"{number_tumors} zone(s)"
+        )
+
+    else:
+
+        st.success(
+            "🟢 Aucune tumeur détectée"
+        )
+
+
+    # ========================================================
+    # INFORMATIONS RAPIDES
+    # ========================================================
+
+    metric1, metric2, metric3 = st.columns(3)
+
+    with metric1:
+
+        st.metric(
+            "Tumeur détectée",
+            "Oui" if tumor_detected else "Non"
+        )
+
+    with metric2:
+
+        st.metric(
+            "Zones détectées",
+            number_tumors
+        )
+
+    with metric3:
+
+        if processing_time is not None:
+
+            st.metric(
+                "Temps de traitement",
+                f"{processing_time:.3f} s"
+            )
+
+        else:
+
+            st.metric(
+                "Temps de traitement",
+                "N/A"
+            )
+
+
+    # ========================================================
+    # IMAGE ANNOTÉE
+    # ========================================================
+
+    annotated_base64 = result.get(
+        "image_annotee_base64"
+    )
+
+    if annotated_base64:
+
+        st.subheader(
+            "🎯 Résultat de la segmentation"
+        )
+
+        try:
+
+            annotated_bytes = base64.b64decode(
+                annotated_base64
+            )
+
+            st.image(
+                annotated_bytes,
+                caption="Image analysée et annotée",
+                use_container_width=True
+            )
+
+            # Libération immédiate
+            del annotated_bytes
+
+        except Exception as exc:
+
+            st.error(
+                f"❌ Impossible d'afficher l'image annotée : {exc}"
+            )
+
+
+    # ========================================================
+    # MEILLEURE DÉTECTION
+    # ========================================================
+
+    best_detection = result.get(
+        "meilleure_detection"
+    )
+
+    if best_detection:
+
+        st.subheader(
+            "🏆 Détection principale"
+        )
+
+        classe = best_detection.get(
+            "classe",
+            "Inconnue"
+        )
+
+        confiance = best_detection.get(
+            "confiance",
             0
         )
 
-        best = result.get(
-            "meilleure_detection"
+        mask_available = best_detection.get(
+            "masque_disponible",
+            False
         )
 
-        detections = result.get(
-            "detections",
-            []
-        )
+        c1, c2, c3 = st.columns(3)
+
+        with c1:
+
+            st.metric(
+                "Classe",
+                classe
+            )
+
+        with c2:
+
+            st.metric(
+                "Confiance",
+                f"{confiance * 100:.1f}%"
+            )
+
+        with c3:
+
+            st.metric(
+                "Segmentation",
+                "Disponible"
+                if mask_available
+                else "Non disponible"
+            )
+
 
         # ----------------------------------------------------
-        # Résumé
+        # INDICATEURS
         # ----------------------------------------------------
 
-        st.markdown(
-            f"""
-            <div class="danger-box">
-                <strong>⚠️ Tumeur(s) détectée(s)</strong><br>
-                Le modèle a identifié {nombre_tumeurs}
-                zone(s) correspondant à une tumeur.
-            </div>
-            """,
-            unsafe_allow_html=True
+        indicators = best_detection.get(
+            "indicateurs"
         )
 
-        # ----------------------------------------------------
-        # INDICATEURS PRINCIPAUX
-        # ----------------------------------------------------
-
-        if best is not None:
-
-            col1, col2, col3, col4 = st.columns(4)
-
-            with col1:
-
-                st.metric(
-                    "Classe",
-                    best.get(
-                        "classe",
-                        "Inconnue"
-                    )
-                )
-
-            with col2:
-
-                confidence = (
-                    best.get(
-                        "confiance",
-                        0
-                    ) * 100
-                )
-
-                st.metric(
-                    "Confiance",
-                    f"{confidence:.1f}%"
-                )
-
-            with col3:
-
-                st.metric(
-                    "Zones détectées",
-                    nombre_tumeurs
-                )
-
-            with col4:
-
-                st.metric(
-                    "Temps",
-                    f"{result.get('temps_traitement_s', 0)} s"
-                )
-
-        # ====================================================
-        # IMAGE ANNOTÉE
-        # ====================================================
-
-        st.subheader(
-            "🧠 Détection et segmentation"
-        )
-
-        image_base64 = result.get(
-            "image_annotee_base64"
-        )
-
-        if image_base64:
-
-            try:
-
-                image_bytes = base64.b64decode(
-                    image_base64
-                )
-
-                annotated_image = Image.open(
-                    BytesIO(image_bytes)
-                )
-
-                st.image(
-                    annotated_image,
-                    caption=(
-                        "Résultat YOLO11m-seg : "
-                        "détection et masque de segmentation"
-                    ),
-                    use_column_width=True
-                )
-
-            except Exception as exc:
-
-                st.error(
-                    f"Impossible d'afficher l'image annotée : {exc}"
-                )
-
-        # ====================================================
-        # DÉTAILS DE LA MEILLEURE DÉTECTION
-        # ====================================================
-
-        if best is not None:
+        if indicators:
 
             st.subheader(
                 "📐 Indicateurs géométriques"
             )
 
-            indicators = best.get(
-                "indicateurs",
+            dimensions = indicators.get(
+                "dimensions_px",
                 {}
             )
 
-            if indicators:
+            centre = indicators.get(
+                "centre",
+                {}
+            )
 
-                # --------------------------------------------
-                # Centre / position
-                # --------------------------------------------
 
-                centre = indicators.get(
-                    "centre",
-                    {}
-                )
+            # Ligne 1
+            c1, c2, c3 = st.columns(3)
 
-                position = indicators.get(
-                    "position_dans_image",
-                    "inconnue"
-                )
+            with c1:
 
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-
-                    st.metric(
-                        "Position",
-                        position
-                    )
-
-                with col2:
-
-                    st.metric(
-                        "Centre X",
-                        f"{centre.get('x', 0):.2f} px"
-                    )
-
-                with col3:
-
-                    st.metric(
-                        "Centre Y",
-                        f"{centre.get('y', 0):.2f} px"
-                    )
-
-                # --------------------------------------------
-                # Dimensions
-                # --------------------------------------------
-
-                dimensions = indicators.get(
-                    "dimensions_px",
-                    {}
-                )
-
-                st.markdown(
-                    "#### Dimensions de la tumeur"
-                )
-
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-
-                    st.metric(
-                        "Largeur",
-                        f"{dimensions.get('largeur', 0)} px"
-                    )
-
-                with col2:
-
-                    st.metric(
-                        "Hauteur",
-                        f"{dimensions.get('hauteur', 0)} px"
-                    )
-
-                with col3:
-
-                    st.metric(
-                        "Ratio largeur / hauteur",
-                        indicators.get(
-                            "ratio_largeur_hauteur",
-                            0
-                        )
-                    )
-
-                # --------------------------------------------
-                # Surface
-                # --------------------------------------------
-
-                st.markdown(
-                    "#### Surface"
-                )
-
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
+                if "surface_masque_px" in indicators:
 
                     st.metric(
                         "Surface du masque",
-                        f"{indicators.get('surface_masque_px', 0):.2f} px²"
+                        f"{indicators['surface_masque_px']:.2f} px²"
                     )
 
-                with col2:
+                elif "surface_bounding_box_px" in indicators:
 
                     st.metric(
                         "Surface",
-                        f"{indicators.get('surface_masque_mm2', 0):.2f} mm²"
+                        f"{indicators['surface_bounding_box_px']:.2f} px²"
                     )
 
-                with col3:
+            with c2:
+
+                if "surface_masque_mm2" in indicators:
+
+                    st.metric(
+                        "Surface",
+                        f"{indicators['surface_masque_mm2']:.2f} mm²"
+                    )
+
+            with c3:
+
+                if "occupation_image_pourcent" in indicators:
 
                     st.metric(
                         "Occupation de l'image",
-                        f"{indicators.get('occupation_image_pourcent', 0):.2f}%"
+                        f"{indicators['occupation_image_pourcent']:.2f}%"
                     )
 
-                # --------------------------------------------
-                # Forme
-                # --------------------------------------------
 
-                st.markdown(
-                    "#### Forme de la tumeur"
-                )
+            # Ligne 2
+            c1, c2, c3 = st.columns(3)
 
-                col1, col2, col3 = st.columns(3)
+            with c1:
 
-                with col1:
+                if "perimetre_px" in indicators:
 
                     st.metric(
                         "Périmètre",
-                        f"{indicators.get('perimetre_px', 0):.2f} px"
+                        f"{indicators['perimetre_px']:.2f} px"
                     )
 
-                with col2:
+            with c2:
+
+                if "diametre_max_px" in indicators:
 
                     st.metric(
                         "Diamètre maximal",
-                        f"{indicators.get('diametre_max_px', 0):.2f} px"
+                        f"{indicators['diametre_max_px']:.2f} px"
                     )
 
-                with col3:
+            with c3:
+
+                if "circularite" in indicators:
 
                     st.metric(
                         "Circularité",
-                        indicators.get(
-                            "circularite",
-                            0
-                        )
+                        f"{indicators['circularite']:.3f}"
                     )
 
-                # --------------------------------------------
-                # Localisation
-                # --------------------------------------------
 
-                st.markdown(
-                    "#### Localisation"
-                )
+            # Ligne 3
+            c1, c2, c3 = st.columns(3)
 
-                col1, col2 = st.columns(2)
+            with c1:
 
-                with col1:
+                if "ratio_largeur_hauteur" in indicators:
 
                     st.metric(
-                        "Position dans l'image",
-                        position
+                        "Ratio largeur / hauteur",
+                        indicators["ratio_largeur_hauteur"]
                     )
 
-                with col2:
+            with c2:
+
+                if "position_dans_image" in indicators:
 
                     st.metric(
-                        "Distance du centre",
-                        f"{indicators.get('distance_centre_image_px', 0):.2f} px"
+                        "Position",
+                        indicators["position_dans_image"]
                     )
 
-                # --------------------------------------------
-                # Avertissement indicateurs
-                # --------------------------------------------
+            with c3:
 
-                if indicators.get("avertissement"):
+                if "distance_centre_image_px" in indicators:
 
-                    st.info(
-                        indicators["avertissement"]
+                    st.metric(
+                        "Distance centre image",
+                        f"{indicators['distance_centre_image_px']:.2f} px"
                     )
 
-        # ====================================================
-        # TOUTES LES DÉTECTIONS
-        # ====================================================
 
-        if len(detections) > 1:
+            # Dimensions
+            if dimensions:
 
-            st.subheader(
-                "🔎 Détail de toutes les détections"
+                st.write(
+                    "**Dimensions de la zone segmentée :** "
+                    f"{dimensions.get('largeur', 0)} × "
+                    f"{dimensions.get('hauteur', 0)} px"
+                )
+
+
+            # Centre
+            if centre:
+
+                st.write(
+                    "**Centre de la tumeur :** "
+                    f"X = {centre.get('x', 0):.2f}, "
+                    f"Y = {centre.get('y', 0):.2f}"
+                )
+
+
+            # Avertissement segmentation
+            warning = indicators.get(
+                "avertissement"
             )
 
-            for detection in detections:
+            if warning:
 
-                detection_id = detection.get(
-                    "id",
-                    "?"
+                st.info(
+                    warning
                 )
 
-                classe = detection.get(
-                    "classe",
-                    "Inconnue"
+
+    # ========================================================
+    # AUTRES DÉTECTIONS
+    # ========================================================
+
+    detections = result.get(
+        "detections",
+        []
+    )
+
+    if len(detections) > 1:
+
+        st.subheader(
+            "🔎 Détails des autres détections"
+        )
+
+        for detection in detections:
+
+            detection_id = detection.get(
+                "id",
+                "?"
+            )
+
+            classe = detection.get(
+                "classe",
+                "Inconnue"
+            )
+
+            confidence = detection.get(
+                "confiance",
+                0
+            )
+
+            mask_available = detection.get(
+                "masque_disponible",
+                False
+            )
+
+            with st.expander(
+                f"Détection #{detection_id} — {classe}"
+            ):
+
+                st.write(
+                    f"**Classe :** {classe}"
                 )
 
-                confiance = (
-                    detection.get(
-                        "confiance",
-                        0
-                    ) * 100
+                st.write(
+                    f"**Confiance :** "
+                    f"{confidence * 100:.1f}%"
                 )
 
-                with st.expander(
-                    f"Détection #{detection_id} — "
-                    f"{classe} — "
-                    f"{confiance:.1f}%"
-                ):
+                st.write(
+                    "**Masque :** "
+                    + (
+                        "Disponible"
+                        if mask_available
+                        else "Non disponible"
+                    )
+                )
 
-                    col1, col2 = st.columns(2)
+                indicators = detection.get(
+                    "indicateurs"
+                )
 
-                    with col1:
+                if indicators:
 
-                        st.write(
-                            "**Classe :**",
-                            classe
-                        )
-
-                        st.write(
-                            "**Confiance :**",
-                            f"{confiance:.1f}%"
-                        )
-
-                    with col2:
-
-                        bbox = detection.get(
-                            "boite_englobante",
-                            {}
-                        )
-
-                        st.write(
-                            "**Bounding box :**"
-                        )
-
-                        st.json(
-                            bbox
-                        )
-
-                    detection_indicators = detection.get(
-                        "indicateurs",
-                        {}
+                    st.json(
+                        indicators
                     )
 
-                    if detection_indicators:
 
-                        st.write(
-                            "**Indicateurs :**"
-                        )
+    # ========================================================
+    # AVERTISSEMENT FINAL
+    # ========================================================
 
-                        st.json(
-                            detection_indicators
-                        )
+    st.markdown(
+        """
+        <div class="warning-box">
 
-        # ====================================================
-        # INFORMATIONS TECHNIQUES
-        # ====================================================
+        ⚠️ <strong>Important :</strong>
+        les résultats présentés sont issus d'un modèle
+        d'intelligence artificielle et doivent être interprétés
+        et validés par un professionnel de santé.
 
-        st.divider()
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-        with st.expander(
-            "ℹ️ Informations techniques"
-        ):
 
-            st.write(
-                "**Modèle :** YOLO11m-seg"
-            )
+    # ========================================================
+    # LIBÉRATION DES OBJETS TEMPORAIRES
+    # ========================================================
 
-            st.write(
-                "**Architecture :** FastAPI + Streamlit"
-            )
+    del file_bytes
 
-            st.write(
-                f"**API :** {API_URL}"
-            )
-
-            st.write(
-                f"**Seuil de confiance :** "
-                f"{os.getenv('CONFIDENCE_THRESHOLD', '0.5')}"
-            )
-
-            st.write(
-                "**Segmentation :** masque réel de la tumeur"
-            )
-
-            st.write(
-                "**Indicateurs :** surface, périmètre, "
-                "diamètre, centre, position, occupation, "
-                "ratio largeur/hauteur et circularité"
-            )
-
-            st.write(
-                "**Limite :** les mesures sont calculées "
-                "sur une image 2D et ne permettent pas "
-                "d'estimer le volume réel en 3D."
-            )
+    # La réponse JSON n'est plus nécessaire après affichage.
+    # On ne la conserve pas dans st.session_state.
