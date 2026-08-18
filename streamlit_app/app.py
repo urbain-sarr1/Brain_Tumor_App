@@ -1,16 +1,16 @@
 """
 Interface Streamlit - Brain Tumor App
 
-L'interface ne charge PAS le modèle YOLO.
+L'interface Streamlit ne charge PAS le modèle YOLO.
 Elle communique uniquement avec l'API FastAPI.
 
 API attendue :
     POST /predict
+    GET  /health
 """
 
 import os
 import base64
-
 import requests
 import streamlit as st
 
@@ -48,24 +48,33 @@ st.set_page_config(
 
 
 # ============================================================
-# SUPPRESSION DE LA SIDEBAR
+# STYLE
 # ============================================================
 
 st.markdown(
     """
     <style>
 
-    /* Supprime complètement la sidebar */
+    /* ======================================================
+       SUPPRESSION COMPLÈTE DE LA SIDEBAR
+       ====================================================== */
+
     [data-testid="stSidebar"] {
-        display: none;
+        display: none !important;
     }
 
-    /* Supprime l'espace réservé à la sidebar */
     [data-testid="stSidebarCollapsedControl"] {
-        display: none;
+        display: none !important;
     }
 
-    /* Réduit légèrement les marges */
+    section[data-testid="stSidebar"] {
+        display: none !important;
+    }
+
+    /* ======================================================
+       CONTENEUR PRINCIPAL
+       ====================================================== */
+
     .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
@@ -73,7 +82,10 @@ st.markdown(
         padding-right: 3rem;
     }
 
-    /* Style des informations */
+    /* ======================================================
+       BOÎTES
+       ====================================================== */
+
     .info-box {
         padding: 1rem;
         border-radius: 10px;
@@ -100,7 +112,9 @@ st.markdown(
 # TITRE
 # ============================================================
 
-st.title("🧠 Détection et segmentation des tumeurs cérébrales")
+st.title(
+    "🧠 Détection et segmentation des tumeurs cérébrales"
+)
 
 st.markdown(
     """
@@ -123,18 +137,20 @@ st.warning(
 
 
 # ============================================================
-# VÉRIFICATION API
+# ÉTAT DE L'API
 # ============================================================
 
-with st.expander("🔧 État du service", expanded=False):
+with st.expander(
+    "🔧 État du service",
+    expanded=False
+):
 
     st.write(
         f"**API :** `{API_URL}`"
     )
 
     if st.button(
-        "Tester la connexion à l'API",
-        use_container_width=True
+        "Tester la connexion à l'API"
     ):
 
         try:
@@ -178,7 +194,9 @@ with st.expander("🔧 État du service", expanded=False):
 # UPLOAD IMAGE
 # ============================================================
 
-st.subheader("📤 Sélectionner une image IRM")
+st.subheader(
+    "📤 Sélectionner une image IRM"
+)
 
 uploaded_file = st.file_uploader(
     "Choisissez une image à analyser",
@@ -192,7 +210,7 @@ uploaded_file = st.file_uploader(
 
 
 # ============================================================
-# SI AUCUNE IMAGE
+# AUCUNE IMAGE
 # ============================================================
 
 if uploaded_file is None:
@@ -226,22 +244,34 @@ if file_size_mb > MAX_FILE_SIZE_MB:
 
 
 # ============================================================
-# AFFICHAGE IMAGE AVANT ANALYSE
+# IMAGE SÉLECTIONNÉE
 # ============================================================
 
-st.subheader("🖼️ Image sélectionnée")
+st.subheader(
+    "🖼️ Image sélectionnée"
+)
 
 col_image, col_info = st.columns(
     [2, 1]
 )
+
+
+# ============================================================
+# AFFICHAGE IMAGE
+# ============================================================
 
 with col_image:
 
     st.image(
         uploaded_file,
         caption="Image IRM sélectionnée",
-        use_container_width=True
+        use_column_width=True
     )
+
+
+# ============================================================
+# INFORMATIONS FICHIER
+# ============================================================
 
 with col_info:
 
@@ -277,8 +307,7 @@ st.divider()
 
 analyze = st.button(
     "🔍 Analyser l'image",
-    type="primary",
-    use_container_width=True
+    type="primary"
 )
 
 
@@ -288,9 +317,9 @@ analyze = st.button(
 
 if analyze:
 
-    # --------------------------------------------------------
-    # Lecture des bytes
-    # --------------------------------------------------------
+    # ========================================================
+    # LECTURE DES BYTES
+    # ========================================================
 
     try:
 
@@ -305,9 +334,9 @@ if analyze:
         st.stop()
 
 
-    # --------------------------------------------------------
-    # Appel API
-    # --------------------------------------------------------
+    # ========================================================
+    # APPEL API
+    # ========================================================
 
     with st.spinner(
         "🧠 Analyse de l'image en cours..."
@@ -330,8 +359,13 @@ if analyze:
         except requests.Timeout:
 
             st.error(
-                "⏱️ L'analyse a dépassé le délai d'attente. "
-                "L'API est peut-être en cours de démarrage."
+                "⏱️ L'analyse a dépassé le délai d'attente."
+            )
+
+            st.info(
+                "L'API Render est peut-être en cours "
+                "de démarrage ou le modèle prend trop "
+                "de temps à charger."
             )
 
             st.stop()
@@ -357,22 +391,16 @@ if analyze:
             st.stop()
 
 
-    # --------------------------------------------------------
-    # Gestion des erreurs HTTP
-    # --------------------------------------------------------
+    # ========================================================
+    # ERREURS HTTP
+    # ========================================================
 
     if response.status_code != 200:
 
-        if response.status_code == 413:
+        if response.status_code == 400:
 
             st.error(
-                "❌ Image trop volumineuse."
-            )
-
-        elif response.status_code == 415:
-
-            st.error(
-                "❌ Format d'image non accepté."
+                "❌ Image invalide ou fichier corrompu."
             )
 
         elif response.status_code == 403:
@@ -386,10 +414,16 @@ if analyze:
                 "et la configuration du service Render."
             )
 
-        elif response.status_code == 503:
+        elif response.status_code == 413:
 
             st.error(
-                "❌ Le modèle IA n'est actuellement pas disponible."
+                "❌ Image trop volumineuse."
+            )
+
+        elif response.status_code == 415:
+
+            st.error(
+                "❌ Format d'image non accepté."
             )
 
         elif response.status_code == 500:
@@ -398,35 +432,54 @@ if analyze:
                 "❌ Erreur interne pendant l'analyse."
             )
 
+        elif response.status_code == 503:
+
+            st.error(
+                "❌ Le modèle IA n'est actuellement "
+                "pas disponible."
+            )
+
         else:
 
             st.error(
-                f"❌ Erreur API : HTTP {response.status_code}"
+                f"❌ Erreur API : HTTP "
+                f"{response.status_code}"
             )
 
-        # Essaye de récupérer le détail fourni par FastAPI
+
+        # ----------------------------------------------------
+        # DÉTAIL ERREUR FASTAPI
+        # ----------------------------------------------------
+
         try:
 
             error_data = response.json()
 
-            if isinstance(error_data, dict):
+            if isinstance(
+                error_data,
+                dict
+            ):
 
-                detail = error_data.get("detail")
+                detail = error_data.get(
+                    "detail"
+                )
 
                 if detail:
+
                     st.caption(
                         f"Détail : {detail}"
                     )
 
         except Exception:
+
             pass
 
         st.stop()
 
 
-    # --------------------------------------------------------
-    # Lecture JSON
-    # --------------------------------------------------------
+    # ========================================================
+    # LECTURE JSON
+    # ========================================================
 
     try:
 
@@ -435,7 +488,8 @@ if analyze:
     except Exception:
 
         st.error(
-            "❌ La réponse de l'API n'est pas un JSON valide."
+            "❌ La réponse de l'API n'est pas "
+            "un JSON valide."
         )
 
         st.stop()
@@ -447,8 +501,14 @@ if analyze:
 
     st.divider()
 
-    st.subheader("📊 Résultats de l'analyse")
+    st.subheader(
+        "📊 Résultats de l'analyse"
+    )
 
+
+    # ========================================================
+    # RÉCUPÉRATION RÉSULTATS
+    # ========================================================
 
     tumor_detected = result.get(
         "tumeur_detectee",
@@ -489,6 +549,7 @@ if analyze:
 
     metric1, metric2, metric3 = st.columns(3)
 
+
     with metric1:
 
         st.metric(
@@ -496,12 +557,14 @@ if analyze:
             "Oui" if tumor_detected else "Non"
         )
 
+
     with metric2:
 
         st.metric(
             "Zones détectées",
             number_tumors
         )
+
 
     with metric3:
 
@@ -543,16 +606,16 @@ if analyze:
             st.image(
                 annotated_bytes,
                 caption="Image analysée et annotée",
-                use_container_width=True
+                use_column_width=True
             )
 
-            # Libération immédiate
             del annotated_bytes
 
         except Exception as exc:
 
             st.error(
-                f"❌ Impossible d'afficher l'image annotée : {exc}"
+                "❌ Impossible d'afficher "
+                f"l'image annotée : {exc}"
             )
 
 
@@ -585,7 +648,9 @@ if analyze:
             False
         )
 
+
         c1, c2, c3 = st.columns(3)
+
 
         with c1:
 
@@ -594,6 +659,7 @@ if analyze:
                 classe
             )
 
+
         with c2:
 
             st.metric(
@@ -601,19 +667,22 @@ if analyze:
                 f"{confiance * 100:.1f}%"
             )
 
+
         with c3:
 
             st.metric(
                 "Segmentation",
-                "Disponible"
-                if mask_available
-                else "Non disponible"
+                (
+                    "Disponible"
+                    if mask_available
+                    else "Non disponible"
+                )
             )
 
 
-        # ----------------------------------------------------
-        # INDICATEURS
-        # ----------------------------------------------------
+        # ====================================================
+        # INDICATEURS GÉOMÉTRIQUES
+        # ====================================================
 
         indicators = best_detection.get(
             "indicateurs"
@@ -624,6 +693,7 @@ if analyze:
             st.subheader(
                 "📐 Indicateurs géométriques"
             )
+
 
             dimensions = indicators.get(
                 "dimensions_px",
@@ -636,8 +706,12 @@ if analyze:
             )
 
 
-            # Ligne 1
+            # ------------------------------------------------
+            # LIGNE 1
+            # ------------------------------------------------
+
             c1, c2, c3 = st.columns(3)
+
 
             with c1:
 
@@ -655,6 +729,7 @@ if analyze:
                         f"{indicators['surface_bounding_box_px']:.2f} px²"
                     )
 
+
             with c2:
 
                 if "surface_masque_mm2" in indicators:
@@ -663,6 +738,7 @@ if analyze:
                         "Surface",
                         f"{indicators['surface_masque_mm2']:.2f} mm²"
                     )
+
 
             with c3:
 
@@ -674,8 +750,12 @@ if analyze:
                     )
 
 
-            # Ligne 2
+            # ------------------------------------------------
+            # LIGNE 2
+            # ------------------------------------------------
+
             c1, c2, c3 = st.columns(3)
+
 
             with c1:
 
@@ -686,6 +766,7 @@ if analyze:
                         f"{indicators['perimetre_px']:.2f} px"
                     )
 
+
             with c2:
 
                 if "diametre_max_px" in indicators:
@@ -694,6 +775,7 @@ if analyze:
                         "Diamètre maximal",
                         f"{indicators['diametre_max_px']:.2f} px"
                     )
+
 
             with c3:
 
@@ -705,8 +787,12 @@ if analyze:
                     )
 
 
-            # Ligne 3
+            # ------------------------------------------------
+            # LIGNE 3
+            # ------------------------------------------------
+
             c1, c2, c3 = st.columns(3)
+
 
             with c1:
 
@@ -714,8 +800,11 @@ if analyze:
 
                     st.metric(
                         "Ratio largeur / hauteur",
-                        indicators["ratio_largeur_hauteur"]
+                        indicators[
+                            "ratio_largeur_hauteur"
+                        ]
                     )
+
 
             with c2:
 
@@ -723,8 +812,11 @@ if analyze:
 
                     st.metric(
                         "Position",
-                        indicators["position_dans_image"]
+                        indicators[
+                            "position_dans_image"
+                        ]
                     )
+
 
             with c3:
 
@@ -732,31 +824,61 @@ if analyze:
 
                     st.metric(
                         "Distance centre image",
-                        f"{indicators['distance_centre_image_px']:.2f} px"
+                        (
+                            f"{indicators['distance_centre_image_px']:.2f} px"
+                        )
                     )
 
 
-            # Dimensions
+            # ------------------------------------------------
+            # DIMENSIONS
+            # ------------------------------------------------
+
             if dimensions:
+
+                largeur = dimensions.get(
+                    "largeur",
+                    0
+                )
+
+                hauteur = dimensions.get(
+                    "hauteur",
+                    0
+                )
 
                 st.write(
                     "**Dimensions de la zone segmentée :** "
-                    f"{dimensions.get('largeur', 0)} × "
-                    f"{dimensions.get('hauteur', 0)} px"
+                    f"{largeur} × {hauteur} px"
                 )
 
 
-            # Centre
+            # ------------------------------------------------
+            # CENTRE
+            # ------------------------------------------------
+
             if centre:
+
+                centre_x = centre.get(
+                    "x",
+                    0
+                )
+
+                centre_y = centre.get(
+                    "y",
+                    0
+                )
 
                 st.write(
                     "**Centre de la tumeur :** "
-                    f"X = {centre.get('x', 0):.2f}, "
-                    f"Y = {centre.get('y', 0):.2f}"
+                    f"X = {centre_x:.2f}, "
+                    f"Y = {centre_y:.2f}"
                 )
 
 
-            # Avertissement segmentation
+            # ------------------------------------------------
+            # AVERTISSEMENT
+            # ------------------------------------------------
+
             warning = indicators.get(
                 "avertissement"
             )
@@ -805,6 +927,7 @@ if analyze:
                 False
             )
 
+
             with st.expander(
                 f"Détection #{detection_id} — {classe}"
             ):
@@ -814,7 +937,7 @@ if analyze:
                 )
 
                 st.write(
-                    f"**Confiance :** "
+                    "**Confiance :** "
                     f"{confidence * 100:.1f}%"
                 )
 
@@ -827,14 +950,15 @@ if analyze:
                     )
                 )
 
-                indicators = detection.get(
+
+                detection_indicators = detection.get(
                     "indicateurs"
                 )
 
-                if indicators:
+                if detection_indicators:
 
                     st.json(
-                        indicators
+                        detection_indicators
                     )
 
 
@@ -858,10 +982,7 @@ if analyze:
 
 
     # ========================================================
-    # LIBÉRATION DES OBJETS TEMPORAIRES
+    # NETTOYAGE
     # ========================================================
 
     del file_bytes
-
-    # La réponse JSON n'est plus nécessaire après affichage.
-    # On ne la conserve pas dans st.session_state.

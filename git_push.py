@@ -65,7 +65,7 @@ run("git status")
 # 5. Commit
 # ============================================================
 
-run('git commit -m "Correction de bug memoire"')
+run('git commit -m "Correction de bug "')
 
 
 # ============================================================
