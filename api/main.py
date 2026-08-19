@@ -1,97 +1,48 @@
 """
-API de détection, classification et segmentation de tumeurs cérébrales.
+API FastAPI - Brain Tumor App
 
 Modèle :
-    models/best.pt
+    YOLO11-seg
 
-Optimisations mémoire :
-    - inférence PyTorch sans gradients
-    - limitation des threads CPU
-    - réduction des copies d'images
-    - libération explicite des résultats temporaires
-    - traitement des masques de manière économe
-    - nettoyage mémoire après chaque prédiction
+Fonctions :
+    - Détection
+    - Classification
+    - Segmentation
+    - Analyse géométrique 2D des tumeurs
 
-Le modèle YOLO utilisé est un modèle de SEGMENTATION.
+IMPORTANT :
+Les indicateurs géométriques sont calculés à partir du masque
+de segmentation 2D retourné par YOLO.
+
+Ils décrivent la forme, la taille et la localisation apparentes
+de la lésion dans la coupe IRM analysée.
+
+Ils ne constituent PAS un diagnostic médical.
+Une image 2D ne permet notamment pas de calculer un véritable
+volume tumoral 3D.
 """
 
-import base64
-import gc
-import logging
+# ============================================================
+# IMPORTS
+# ============================================================
+
 import os
+import io
+import gc
 import time
-from pathlib import Path
+import base64
+import logging
+from typing import Any
 
 import cv2
 import numpy as np
-import torch
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+
+from PIL import Image
+
 from ultralytics import YOLO
-
-
-# ============================================================
-# OPTIMISATION MÉMOIRE / CPU
-# ============================================================
-
-try:
-    torch.set_num_threads(1)
-    torch.set_num_interop_threads(1)
-except Exception:
-    pass
-
-try:
-    cv2.setNumThreads(1)
-except Exception:
-    pass
-
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-BASE_DIR = Path(__file__).resolve().parent
-
-MODEL_PATH = Path(
-    os.getenv(
-        "MODEL_PATH",
-        str(BASE_DIR / "models" / "best.pt")
-    )
-)
-
-MAX_FILE_SIZE_MB = int(
-    os.getenv(
-        "MAX_FILE_SIZE_MB",
-        "10"
-    )
-)
-
-CONFIDENCE_THRESHOLD = float(
-    os.getenv(
-        "CONFIDENCE_THRESHOLD",
-        "0.5"
-    )
-)
-
-PIXEL_SPACING_MM = float(
-    os.getenv(
-        "PIXEL_SPACING_MM",
-        "1.0"
-    )
-)
-
-ALLOWED_CONTENT_TYPES = {
-    "image/jpeg",
-    "image/png",
-}
-
-DISCLAIMER = (
-    "Ce système est un outil d'aide à la décision et ne constitue "
-    "pas un diagnostic médical. La validation finale doit être "
-    "réalisée par un professionnel de santé."
-)
 
 
 # ============================================================
@@ -102,22 +53,45 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-logger = logging.getLogger(
-    "brain-tumor-api"
+logger = logging.getLogger("brain-tumor-api")
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "models",
+    "best.pt"
+)
+
+IMG_SIZE = 640
+
+CONF_THRESHOLD = 0.25
+
+MAX_FILE_SIZE_MB = 10
+
+MAX_FILE_SIZE_BYTES = (
+    MAX_FILE_SIZE_MB * 1024 * 1024
 )
 
 
 # ============================================================
-# FASTAPI
+# APPLICATION FASTAPI
 # ============================================================
 
 app = FastAPI(
-    title="Brain Tumor Segmentation API",
+    title="Brain Tumor API",
     description=(
-        "API de détection, classification et segmentation "
-        "des tumeurs cérébrales à partir d'images IRM."
+        "API de détection, classification, segmentation "
+        "et analyse géométrique 2D des tumeurs cérébrales."
     ),
-    version="2.2.0",
+    version="2.0.0"
 )
 
 
@@ -127,56 +101,44 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv(
-        "ALLOWED_ORIGINS",
-        "*"
-    ).split(","),
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 # ============================================================
-# MODÈLE
+# CHARGEMENT DU MODÈLE
 # ============================================================
 
-model = None
+logger.info("=" * 60)
+logger.info("CHARGEMENT DU MODÈLE")
+logger.info("=" * 60)
 
+logger.info(
+    f"Chemin : {MODEL_PATH}"
+)
 
-def load_model():
-    """
-    Charge le modèle UNE SEULE FOIS au démarrage de FastAPI.
-    """
+logger.info(
+    f"Existe : {os.path.exists(MODEL_PATH)}"
+)
 
-    global model
+if not os.path.exists(MODEL_PATH):
 
-    logger.info("=" * 60)
-    logger.info("CHARGEMENT DU MODÈLE")
-    logger.info("=" * 60)
-
-    logger.info(
-        "Chemin : %s",
-        MODEL_PATH
+    logger.error(
+        "❌ Fichier best.pt introuvable."
     )
 
-    logger.info(
-        "Existe : %s",
-        MODEL_PATH.is_file()
-    )
+    model = None
 
-    if not MODEL_PATH.is_file():
-
-        logger.error(
-            "❌ Modèle introuvable : %s",
-            MODEL_PATH
-        )
-
-        return
+else:
 
     try:
 
         model = YOLO(
-            str(MODEL_PATH)
+            MODEL_PATH,
+            task="segment"
         )
 
         logger.info(
@@ -184,49 +146,717 @@ def load_model():
         )
 
         logger.info(
-            "Tâche : %s",
-            getattr(
-                model,
-                "task",
-                "inconnue"
-            )
+            f"Tâche : {model.task}"
         )
 
         logger.info(
-            "Classes : %s",
-            getattr(
-                model,
-                "names",
-                {}
-            )
+            f"Classes : {model.names}"
         )
-
-        if getattr(
-            model,
-            "task",
-            None
-        ) != "segment":
-
-            logger.warning(
-                "⚠️ Le modèle chargé n'est "
-                "pas un modèle de segmentation."
-            )
 
     except Exception as exc:
 
         logger.exception(
-            "❌ Erreur chargement modèle : %s",
-            exc
+            "❌ Erreur lors du chargement du modèle."
         )
 
         model = None
 
 
 # ============================================================
-# CHARGEMENT AU DÉMARRAGE
+# FONCTIONS UTILITAIRES
 # ============================================================
 
-load_model()
+def safe_float(value: Any, default: float = 0.0) -> float:
+    """
+    Convertit une valeur en float sans provoquer d'erreur.
+    """
+
+    try:
+
+        value = float(value)
+
+        if np.isfinite(value):
+            return value
+
+    except Exception:
+        pass
+
+    return default
+
+
+def encode_image_base64(
+    image: np.ndarray
+) -> str:
+    """
+    Convertit une image OpenCV en Base64 JPEG.
+    """
+
+    success, encoded = cv2.imencode(
+        ".jpg",
+        image,
+        [
+            cv2.IMWRITE_JPEG_QUALITY,
+            85
+        ]
+    )
+
+    if not success:
+
+        raise ValueError(
+            "Impossible d'encoder l'image."
+        )
+
+    return base64.b64encode(
+        encoded.tobytes()
+    ).decode("utf-8")
+
+
+# ============================================================
+# ANALYSE DU POLYGONE
+# ============================================================
+
+def calculate_geometric_indicators(
+    polygon: np.ndarray,
+    image_width: int,
+    image_height: int
+) -> dict:
+    """
+    Calcule les indicateurs géométriques à partir du
+    polygone du masque YOLO.
+
+    Le calcul est effectué directement sur le contour
+    afin d'éviter de créer inutilement un masque complet
+    de la taille de l'image.
+    """
+
+    # --------------------------------------------------------
+    # Sécurisation du polygone
+    # --------------------------------------------------------
+
+    polygon = np.asarray(
+        polygon,
+        dtype=np.float32
+    )
+
+    if polygon.ndim != 2 or polygon.shape[0] < 3:
+
+        return {}
+
+    contour = polygon.reshape(
+        (-1, 1, 2)
+    )
+
+    # --------------------------------------------------------
+    # Surface du masque
+    # --------------------------------------------------------
+
+    surface = cv2.contourArea(
+        contour
+    )
+
+    # --------------------------------------------------------
+    # Périmètre
+    # --------------------------------------------------------
+
+    perimeter = cv2.arcLength(
+        contour,
+        True
+    )
+
+    # --------------------------------------------------------
+    # Bounding box
+    # --------------------------------------------------------
+
+    x, y, width, height = cv2.boundingRect(
+        contour
+    )
+
+    bbox_area = (
+        float(width) * float(height)
+    )
+
+    # --------------------------------------------------------
+    # Centre du masque
+    # --------------------------------------------------------
+
+    moments = cv2.moments(
+        contour
+    )
+
+    if moments["m00"] != 0:
+
+        center_x = (
+            moments["m10"] /
+            moments["m00"]
+        )
+
+        center_y = (
+            moments["m01"] /
+            moments["m00"]
+        )
+
+    else:
+
+        center_x = (
+            x + width / 2
+        )
+
+        center_y = (
+            y + height / 2
+        )
+
+    # --------------------------------------------------------
+    # Occupation de l'image
+    # --------------------------------------------------------
+
+    image_area = (
+        float(image_width) *
+        float(image_height)
+    )
+
+    occupation = 0.0
+
+    if image_area > 0:
+
+        occupation = (
+            surface /
+            image_area
+        ) * 100.0
+
+    # --------------------------------------------------------
+    # Ratio largeur / hauteur
+    # --------------------------------------------------------
+
+    ratio = 0.0
+
+    if height > 0:
+
+        ratio = (
+            float(width) /
+            float(height)
+        )
+
+    # --------------------------------------------------------
+    # Circularité
+    #
+    # 1 ≈ cercle parfait
+    # plus la valeur diminue,
+    # plus la forme s'éloigne du cercle.
+    # --------------------------------------------------------
+
+    circularity = 0.0
+
+    if perimeter > 0:
+
+        circularity = (
+            4.0 *
+            np.pi *
+            surface /
+            (perimeter ** 2)
+        )
+
+    circularity = min(
+        max(circularity, 0.0),
+        1.0
+    )
+
+    # --------------------------------------------------------
+    # Diamètre maximal
+    # --------------------------------------------------------
+
+    diameter_max = 0.0
+
+    if len(polygon) >= 2:
+
+        max_distance = 0.0
+
+        for i in range(
+            len(polygon)
+        ):
+
+            point_a = polygon[i]
+
+            distances = np.linalg.norm(
+                polygon[
+                    i + 1:
+                ] - point_a,
+                axis=1
+            )
+
+            if len(distances) > 0:
+
+                current_max = float(
+                    np.max(distances)
+                )
+
+                if current_max > max_distance:
+                    max_distance = current_max
+
+        diameter_max = max_distance
+
+    # --------------------------------------------------------
+    # Enveloppe convexe
+    # --------------------------------------------------------
+
+    hull = cv2.convexHull(
+        contour
+    )
+
+    hull_area = cv2.contourArea(
+        hull
+    )
+
+    hull_perimeter = cv2.arcLength(
+        hull,
+        True
+    )
+
+    # --------------------------------------------------------
+    # SOLIDITÉ
+    #
+    # Surface du masque / surface de l'enveloppe convexe.
+    #
+    # Une valeur proche de 1 indique une forme compacte.
+    # --------------------------------------------------------
+
+    solidity = 0.0
+
+    if hull_area > 0:
+
+        solidity = (
+            surface /
+            hull_area
+        )
+
+    # --------------------------------------------------------
+    # ÉTENDUE
+    #
+    # Surface du masque /
+    # surface de la bounding box.
+    # --------------------------------------------------------
+
+    extent = 0.0
+
+    if bbox_area > 0:
+
+        extent = (
+            surface /
+            bbox_area
+        )
+
+    # --------------------------------------------------------
+    # CONVEXITÉ
+    #
+    # Périmètre de l'enveloppe convexe /
+    # périmètre du contour.
+    #
+    # Plus la valeur est proche de 1,
+    # plus le contour est proche d'une forme convexe.
+    # --------------------------------------------------------
+
+    convexity = 0.0
+
+    if perimeter > 0:
+
+        convexity = (
+            hull_perimeter /
+            perimeter
+        )
+
+    # --------------------------------------------------------
+    # ANALYSE DE LA FORME PAR PCA
+    #
+    # Permet d'obtenir :
+    # - axe majeur
+    # - axe mineur
+    # - excentricité
+    # - orientation
+    # --------------------------------------------------------
+
+    major_axis = 0.0
+    minor_axis = 0.0
+    eccentricity = 0.0
+    orientation = 0.0
+
+    points = polygon.astype(
+        np.float64
+    )
+
+    if len(points) >= 3:
+
+        centered = (
+            points -
+            np.mean(
+                points,
+                axis=0
+            )
+        )
+
+        covariance = np.cov(
+            centered,
+            rowvar=False
+        )
+
+        try:
+
+            eigenvalues, eigenvectors = np.linalg.eigh(
+                covariance
+            )
+
+            # Tri décroissant
+            order = np.argsort(
+                eigenvalues
+            )[::-1]
+
+            eigenvalues = eigenvalues[
+                order
+            ]
+
+            eigenvectors = eigenvectors[
+                :,
+                order
+            ]
+
+            lambda_major = max(
+                float(eigenvalues[0]),
+                0.0
+            )
+
+            lambda_minor = max(
+                float(eigenvalues[1]),
+                0.0
+            )
+
+            # Approximation des axes
+            major_axis = (
+                4.0 *
+                np.sqrt(
+                    lambda_major
+                )
+            )
+
+            minor_axis = (
+                4.0 *
+                np.sqrt(
+                    lambda_minor
+                )
+            )
+
+            if lambda_major > 0:
+
+                eccentricity = np.sqrt(
+                    max(
+                        0.0,
+                        1.0 -
+                        (
+                            lambda_minor /
+                            lambda_major
+                        )
+                    )
+                )
+
+            vector = eigenvectors[
+                :,
+                0
+            ]
+
+            orientation = np.degrees(
+                np.arctan2(
+                    vector[1],
+                    vector[0]
+                )
+            )
+
+            # Normalisation de l'angle
+            if orientation < 0:
+
+                orientation += 180.0
+
+        except Exception:
+
+            pass
+
+    # --------------------------------------------------------
+    # DIAMÈTRE MINIMAL APPROXIMATIF
+    #
+    # On utilise le plus petit côté du rectangle
+    # orienté entourant le contour.
+    # --------------------------------------------------------
+
+    diameter_min = 0.0
+
+    try:
+
+        rotated_rect = cv2.minAreaRect(
+            contour
+        )
+
+        rect_width, rect_height = (
+            rotated_rect[1]
+        )
+
+        diameter_min = min(
+            float(rect_width),
+            float(rect_height)
+        )
+
+    except Exception:
+
+        diameter_min = minor_axis
+
+    # --------------------------------------------------------
+    # POSITION NORMALISÉE
+    # --------------------------------------------------------
+
+    position_x_percent = 0.0
+    position_y_percent = 0.0
+
+    if image_width > 0:
+
+        position_x_percent = (
+            center_x /
+            image_width
+        ) * 100.0
+
+    if image_height > 0:
+
+        position_y_percent = (
+            center_y /
+            image_height
+        ) * 100.0
+
+    # --------------------------------------------------------
+    # DISTANCE AU CENTRE DE L'IMAGE
+    # --------------------------------------------------------
+
+    image_center_x = (
+        image_width / 2.0
+    )
+
+    image_center_y = (
+        image_height / 2.0
+    )
+
+    distance_center = float(
+        np.sqrt(
+            (
+                center_x -
+                image_center_x
+            ) ** 2
+            +
+            (
+                center_y -
+                image_center_y
+            ) ** 2
+        )
+    )
+
+    # --------------------------------------------------------
+    # POSITION QUALITATIVE
+    # --------------------------------------------------------
+
+    horizontal = "centre"
+
+    vertical = "centre"
+
+    if position_x_percent < 33.33:
+        horizontal = "gauche"
+
+    elif position_x_percent > 66.67:
+        horizontal = "droite"
+
+    if position_y_percent < 33.33:
+        vertical = "supérieure"
+
+    elif position_y_percent > 66.67:
+        vertical = "inférieure"
+
+    if vertical == "centre" and horizontal == "centre":
+
+        position_label = "centre"
+
+    else:
+
+        position_label = (
+            f"région {vertical} {horizontal}"
+        )
+
+    # --------------------------------------------------------
+    # NOMBRE DE POINTS DU CONTOUR
+    # --------------------------------------------------------
+
+    contour_points = int(
+        len(polygon)
+    )
+
+    # --------------------------------------------------------
+    # RÉSULTAT
+    # --------------------------------------------------------
+
+    return {
+
+        # ------------------------------
+        # Taille
+        # ------------------------------
+
+        "surface_masque_px": round(
+            float(surface),
+            2
+        ),
+
+        "perimetre_px": round(
+            float(perimeter),
+            2
+        ),
+
+        "diametre_max_px": round(
+            float(diameter_max),
+            2
+        ),
+
+        "diametre_min_px": round(
+            float(diameter_min),
+            2
+        ),
+
+        "axe_majeur_px": round(
+            float(major_axis),
+            2
+        ),
+
+        "axe_mineur_px": round(
+            float(minor_axis),
+            2
+        ),
+
+        # ------------------------------
+        # Forme
+        # ------------------------------
+
+        "circularite": round(
+            float(circularity),
+            4
+        ),
+
+        "excentricite": round(
+            float(eccentricity),
+            4
+        ),
+
+        "solidite": round(
+            float(solidity),
+            4
+        ),
+
+        "etendue": round(
+            float(extent),
+            4
+        ),
+
+        "convexite": round(
+            float(convexity),
+            4
+        ),
+
+        "orientation_degres": round(
+            float(orientation),
+            2
+        ),
+
+        # ------------------------------
+        # Dimensions
+        # ------------------------------
+
+        "dimensions_px": {
+
+            "largeur": int(width),
+
+            "hauteur": int(height)
+        },
+
+        "ratio_largeur_hauteur": round(
+            float(ratio),
+            4
+        ),
+
+        # ------------------------------
+        # Localisation
+        # ------------------------------
+
+        "centre": {
+
+            "x": round(
+                float(center_x),
+                2
+            ),
+
+            "y": round(
+                float(center_y),
+                2
+            )
+        },
+
+        "position_dans_image": (
+            position_label
+        ),
+
+        "position_normalisee": {
+
+            "x_pourcent": round(
+                float(position_x_percent),
+                2
+            ),
+
+            "y_pourcent": round(
+                float(position_y_percent),
+                2
+            )
+        },
+
+        "distance_centre_image_px": round(
+            float(distance_center),
+            2
+        ),
+
+        "occupation_image_pourcent": round(
+            float(occupation),
+            4
+        ),
+
+        # ------------------------------
+        # Informations techniques
+        # ------------------------------
+
+        "nombre_points_contour": contour_points,
+
+        # ------------------------------
+        # Limitation
+        # ------------------------------
+
+    }
+
+
+# ============================================================
+# ROUTE RACINE
+# ============================================================
+
+@app.get("/")
+def root():
+
+    return {
+        "application": "Brain Tumor API",
+        "status": "online",
+        "model_loaded": model is not None,
+        "model_task": (
+            model.task
+            if model is not None
+            else None
+        ),
+        "endpoints": {
+            "health": "/health",
+            "predict": "/predict"
+        }
+    }
 
 
 # ============================================================
@@ -237,726 +867,31 @@ load_model()
 def health():
 
     return {
+
         "status": "ok",
-        "model_loaded": model is not None,
-        "model_exists": MODEL_PATH.is_file(),
-        "model_path": str(MODEL_PATH),
-        "model_task": getattr(
-            model,
-            "task",
-            None
+
+        "model_loaded": (
+            model is not None
         ),
+
+        "model_exists": (
+            os.path.exists(
+                MODEL_PATH
+            )
+        ),
+
+        "model_path": MODEL_PATH,
+
+        "model_task": (
+            model.task
+            if model is not None
+            else None
+        )
     }
 
 
 # ============================================================
-# METRICS
-# ============================================================
-
-@app.get(
-    "/metrics",
-    response_class=PlainTextResponse
-)
-def metrics():
-
-    model_loaded = (
-        1
-        if model is not None
-        else 0
-    )
-
-    return (
-        "# HELP brain_tumor_api_model_loaded "
-        "Etat du modele YOLO.\n"
-        "# TYPE brain_tumor_api_model_loaded gauge\n"
-        f"brain_tumor_api_model_loaded "
-        f"{model_loaded}\n"
-    )
-
-
-# ============================================================
-# LECTURE IMAGE
-# ============================================================
-
-def read_image(raw_bytes):
-
-    array = np.frombuffer(
-        raw_bytes,
-        dtype=np.uint8
-    )
-
-    image = cv2.imdecode(
-        array,
-        cv2.IMREAD_COLOR
-    )
-
-    del array
-
-    if image is None:
-
-        raise ValueError(
-            "Image illisible."
-        )
-
-    return image
-
-
-# ============================================================
-# IMAGE → BASE64
-# ============================================================
-
-def image_to_base64(image):
-
-    success, encoded = cv2.imencode(
-        ".jpg",
-        image
-    )
-
-    if not success:
-
-        raise ValueError(
-            "Impossible d'encoder l'image."
-        )
-
-    result = base64.b64encode(
-        encoded
-    ).decode("utf-8")
-
-    del encoded
-
-    return result
-
-
-# ============================================================
-# POSITION
-# ============================================================
-
-def determine_position(
-    center_x,
-    center_y,
-    image_width,
-    image_height
-):
-
-    if (
-        image_width <= 0
-        or image_height <= 0
-    ):
-
-        return "inconnue"
-
-    x_ratio = (
-        center_x / image_width
-    )
-
-    y_ratio = (
-        center_y / image_height
-    )
-
-    if x_ratio < 1 / 3:
-        horizontal = "gauche"
-
-    elif x_ratio < 2 / 3:
-        horizontal = "centre"
-
-    else:
-        horizontal = "droite"
-
-    if y_ratio < 1 / 3:
-        vertical = "haut"
-
-    elif y_ratio < 2 / 3:
-        vertical = "centre"
-
-    else:
-        vertical = "bas"
-
-    if (
-        horizontal == "centre"
-        and vertical == "centre"
-    ):
-        return "centre"
-
-    if horizontal == "centre":
-        return vertical
-
-    if vertical == "centre":
-        return horizontal
-
-    return (
-        f"{vertical}-{horizontal}"
-    )
-
-
-# ============================================================
-# REDIMENSIONNEMENT DU MASQUE
-# ============================================================
-
-def resize_mask_to_image(
-    mask,
-    image_width,
-    image_height
-):
-
-    # Conversion directe en masque binaire uint8.
-    # Cela évite de conserver un tableau float inutilement.
-    mask_uint8 = (
-        mask > 0.5
-    ).astype(
-        np.uint8
-    )
-
-    if (
-        mask_uint8.shape[1] != image_width
-        or mask_uint8.shape[0] != image_height
-    ):
-
-        resized = cv2.resize(
-            mask_uint8,
-            (
-                image_width,
-                image_height
-            ),
-            interpolation=cv2.INTER_NEAREST
-        )
-
-        del mask_uint8
-
-        mask_uint8 = resized
-
-    return mask_uint8
-
-
-# ============================================================
-# INDICATEURS SEGMENTATION
-# ============================================================
-
-def compute_segmentation_indicators(
-    mask,
-    box,
-    image_width,
-    image_height,
-    pixel_spacing_mm=PIXEL_SPACING_MM
-):
-
-    contours, _ = cv2.findContours(
-        mask,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE
-    )
-
-    if not contours:
-
-        return compute_bbox_fallback_indicators(
-            box,
-            image_width,
-            image_height
-        )
-
-    largest = max(
-        contours,
-        key=cv2.contourArea
-    )
-
-    area_px = float(
-        cv2.contourArea(
-            largest
-        )
-    )
-
-    area_mm2 = round(
-        area_px *
-        (pixel_spacing_mm ** 2),
-        2
-    )
-
-    perimeter_px = float(
-        cv2.arcLength(
-            largest,
-            closed=True
-        )
-    )
-
-    perimeter_mm = round(
-        perimeter_px *
-        pixel_spacing_mm,
-        2
-    )
-
-    (_, _), radius = (
-        cv2.minEnclosingCircle(
-            largest
-        )
-    )
-
-    max_diameter_px = round(
-        2 * radius,
-        2
-    )
-
-    max_diameter_mm = round(
-        2 *
-        radius *
-        pixel_spacing_mm,
-        2
-    )
-
-    x, y, width, height = (
-        cv2.boundingRect(
-            largest
-        )
-    )
-
-    aspect_ratio = (
-        round(
-            width / height,
-            3
-        )
-        if height > 0
-        else 0
-    )
-
-    moments = cv2.moments(
-        largest
-    )
-
-    if moments["m00"]:
-
-        center_x = (
-            moments["m10"]
-            /
-            moments["m00"]
-        )
-
-        center_y = (
-            moments["m01"]
-            /
-            moments["m00"]
-        )
-
-    else:
-
-        center_x = (
-            x +
-            width / 2
-        )
-
-        center_y = (
-            y +
-            height / 2
-        )
-
-    position = determine_position(
-        center_x,
-        center_y,
-        image_width,
-        image_height
-    )
-
-    image_center_x = (
-        image_width / 2
-    )
-
-    image_center_y = (
-        image_height / 2
-    )
-
-    distance_center = (
-        (
-            (center_x - image_center_x) ** 2
-            +
-            (center_y - image_center_y) ** 2
-        )
-        ** 0.5
-    )
-
-    image_area = (
-        image_width *
-        image_height
-    )
-
-    occupation = (
-        area_px /
-        image_area *
-        100
-        if image_area > 0
-        else 0
-    )
-
-    circularity = (
-        (
-            4 *
-            np.pi *
-            area_px
-        )
-        /
-        (
-            perimeter_px ** 2
-        )
-        if perimeter_px > 0
-        else 0
-    )
-
-    return {
-
-        "centre": {
-            "x": round(
-                center_x,
-                2
-            ),
-            "y": round(
-                center_y,
-                2
-            )
-        },
-
-        "position_dans_image":
-            position,
-
-        "dimensions_px": {
-            "largeur": width,
-            "hauteur": height
-        },
-
-        "surface_masque_px":
-            round(
-                area_px,
-                2
-            ),
-
-        "surface_masque_mm2":
-            area_mm2,
-
-        "perimetre_px":
-            round(
-                perimeter_px,
-                2
-            ),
-
-        "perimetre_mm":
-            perimeter_mm,
-
-        "diametre_max_px":
-            max_diameter_px,
-
-        "diametre_max_mm":
-            max_diameter_mm,
-
-        "occupation_image_pourcent":
-            round(
-                occupation,
-                2
-            ),
-
-        "ratio_largeur_hauteur":
-            aspect_ratio,
-
-        "circularite":
-            round(
-                circularity,
-                3
-            ),
-
-        "distance_centre_image_px":
-            round(
-                distance_center,
-                2
-            ),
-
-        "avertissement": (
-            "Indicateurs calculés à partir du masque "
-            "de segmentation réel sur une unique coupe "
-            "2D. Le volume 3D n'est pas estimé."
-        ),
-    }
-
-
-# ============================================================
-# FALLBACK BOUNDING BOX
-# ============================================================
-
-def compute_bbox_fallback_indicators(
-    box,
-    image_width,
-    image_height
-):
-
-    x1, y1, x2, y2 = map(
-        float,
-        box
-    )
-
-    x1 = max(
-        0,
-        min(
-            x1,
-            image_width
-        )
-    )
-
-    x2 = max(
-        0,
-        min(
-            x2,
-            image_width
-        )
-    )
-
-    y1 = max(
-        0,
-        min(
-            y1,
-            image_height
-        )
-    )
-
-    y2 = max(
-        0,
-        min(
-            y2,
-            image_height
-        )
-    )
-
-    width = max(
-        0,
-        x2 - x1
-    )
-
-    height = max(
-        0,
-        y2 - y1
-    )
-
-    center_x = (
-        x1 + x2
-    ) / 2
-
-    center_y = (
-        y1 + y2
-    ) / 2
-
-    bbox_area = (
-        width *
-        height
-    )
-
-    image_area = (
-        image_width *
-        image_height
-    )
-
-    occupation = (
-        bbox_area /
-        image_area *
-        100
-        if image_area > 0
-        else 0
-    )
-
-    aspect_ratio = (
-        round(
-            width / height,
-            3
-        )
-        if height > 0
-        else 0
-    )
-
-    distance_center = (
-        (
-            (
-                center_x -
-                image_width / 2
-            ) ** 2
-            +
-            (
-                center_y -
-                image_height / 2
-            ) ** 2
-        )
-        ** 0.5
-    )
-
-    return {
-
-        "centre": {
-            "x": round(
-                center_x,
-                2
-            ),
-            "y": round(
-                center_y,
-                2
-            )
-        },
-
-        "position_dans_image":
-            determine_position(
-                center_x,
-                center_y,
-                image_width,
-                image_height
-            ),
-
-        "dimensions_px": {
-            "largeur":
-                round(
-                    width,
-                    2
-                ),
-            "hauteur":
-                round(
-                    height,
-                    2
-                )
-        },
-
-        "surface_bounding_box_px":
-            round(
-                bbox_area,
-                2
-            ),
-
-        "occupation_image_pourcent":
-            round(
-                occupation,
-                2
-            ),
-
-        "ratio_largeur_hauteur":
-            aspect_ratio,
-
-        "distance_centre_image_px":
-            round(
-                distance_center,
-                2
-            ),
-
-        "avertissement": (
-            "Aucun masque de segmentation disponible "
-            "pour cette détection. Les indicateurs "
-            "sont calculés à partir de la bounding box."
-        ),
-    }
-
-
-# ============================================================
-# DESSIN OPTIMISÉ
-# ============================================================
-
-def draw_detection(
-    image,
-    box,
-    mask,
-    class_name,
-    confidence,
-    color
-):
-
-    # --------------------------------------------------------
-    # MASQUE
-    # --------------------------------------------------------
-
-    if mask is not None:
-
-        selected = (
-            mask > 0
-        )
-
-        if np.any(selected):
-
-            original_pixels = (
-                image[selected]
-                .astype(
-                    np.float32
-                )
-            )
-
-            color_array = np.asarray(
-                color,
-                dtype=np.float32
-            )
-
-            blended = (
-                original_pixels *
-                0.65
-                +
-                color_array *
-                0.35
-            )
-
-            image[selected] = np.clip(
-                blended,
-                0,
-                255
-            ).astype(
-                np.uint8
-            )
-
-            del original_pixels
-            del blended
-            del color_array
-
-        contours, _ = cv2.findContours(
-            mask,
-            cv2.RETR_EXTERNAL,
-            cv2.CHAIN_APPROX_SIMPLE
-        )
-
-        cv2.drawContours(
-            image,
-            contours,
-            -1,
-            color,
-            2
-        )
-
-        del contours
-        del selected
-
-    # --------------------------------------------------------
-    # BOUNDING BOX
-    # --------------------------------------------------------
-
-    x1, y1, x2, y2 = map(
-        int,
-        box
-    )
-
-    cv2.rectangle(
-        image,
-        (x1, y1),
-        (x2, y2),
-        color,
-        1
-    )
-
-    label = (
-        f"{class_name} "
-        f"{confidence * 100:.1f}%"
-    )
-
-    cv2.putText(
-        image,
-        label,
-        (
-            x1,
-            max(
-                25,
-                y1 - 10
-            )
-        ),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        color,
-        2,
-        cv2.LINE_AA
-    )
-
-
-# ============================================================
-# PREDICTION
+# PREDICT
 # ============================================================
 
 @app.post("/predict")
@@ -964,552 +899,430 @@ async def predict(
     file: UploadFile = File(...)
 ):
 
-    start_time = time.perf_counter()
+    start_time = time.time()
 
-    image = None
-    results = None
-    result = None
-    annotated = None
+    # ========================================================
+    # VÉRIFICATION MODÈLE
+    # ========================================================
+
+    if model is None:
+
+        raise HTTPException(
+            status_code=503,
+            detail="Modèle IA non disponible."
+        )
+
+    # ========================================================
+    # VÉRIFICATION FORMAT
+    # ========================================================
+
+    allowed_types = {
+        "image/jpeg",
+        "image/png"
+    }
+
+    if file.content_type not in allowed_types:
+
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                "Format non supporté. "
+                "Utilisez JPG, JPEG ou PNG."
+            )
+        )
+
+    # ========================================================
+    # LECTURE DU FICHIER
+    # ========================================================
 
     try:
 
-        # ====================================================
-        # 1. FORMAT
-        # ====================================================
+        file_bytes = await file.read()
 
-        if (
-            file.content_type
-            not in ALLOWED_CONTENT_TYPES
-        ):
+    except Exception as exc:
 
-            raise HTTPException(
-                status_code=415,
-                detail=(
-                    "Fichier non conforme. "
-                    "Formats acceptés : JPEG et PNG."
-                )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Impossible de lire le fichier : {exc}"
             )
-
-        # ====================================================
-        # 2. LECTURE
-        # ====================================================
-
-        raw_bytes = await file.read()
-
-        if not raw_bytes:
-
-            raise HTTPException(
-                status_code=400,
-                detail="Le fichier est vide."
-            )
-
-        # ====================================================
-        # 3. TAILLE
-        # ====================================================
-
-        size_mb = (
-            len(raw_bytes)
-            /
-            (1024 * 1024)
         )
 
-        if size_mb > MAX_FILE_SIZE_MB:
+    # ========================================================
+    # TAILLE
+    # ========================================================
 
-            del raw_bytes
+    if len(file_bytes) > MAX_FILE_SIZE_BYTES:
 
-            raise HTTPException(
-                status_code=413,
-                detail=(
-                    f"Fichier trop volumineux "
-                    f"({size_mb:.1f} Mo). "
-                    f"Taille maximale : "
-                    f"{MAX_FILE_SIZE_MB} Mo."
-                )
+        del file_bytes
+
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Fichier trop volumineux. "
+                f"Maximum : {MAX_FILE_SIZE_MB} Mo."
             )
+        )
 
-        # ====================================================
-        # 4. DÉCODAGE
-        # ====================================================
+    # ========================================================
+    # OUVERTURE IMAGE
+    # ========================================================
 
-        try:
+    try:
 
-            image = read_image(
-                raw_bytes
+        image = Image.open(
+            io.BytesIO(file_bytes)
+        )
+
+        image.verify()
+
+        # Recréation après verify()
+        image = Image.open(
+            io.BytesIO(file_bytes)
+        ).convert("RGB")
+
+    except Exception as exc:
+
+        del file_bytes
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Image invalide ou corrompue : {exc}"
             )
+        )
 
-        except Exception:
+    # On n'a plus besoin du fichier brut
+    del file_bytes
 
-            del raw_bytes
+    # ========================================================
+    # CONVERSION NUMPY
+    # ========================================================
 
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Image non conforme "
-                    "ou fichier corrompu."
-                )
-            )
+    try:
 
-        # Le fichier binaire original n'est plus nécessaire.
-        del raw_bytes
-
-        # ====================================================
-        # 5. MODÈLE
-        # ====================================================
-
-        if model is None:
-
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Le modèle d'IA n'est "
-                    "actuellement pas disponible."
-                )
-            )
-
-        # ====================================================
-        # 6. DIMENSIONS
-        # ====================================================
+        image_np = np.asarray(
+            image,
+            dtype=np.uint8
+        )
 
         image_height, image_width = (
-            image.shape[:2]
+            image_np.shape[:2]
         )
 
-        # ====================================================
-        # 7. INFÉRENCE OPTIMISÉE
-        # ====================================================
+    except Exception as exc:
 
-        try:
+        del image
 
-            # Pas de calcul de gradients.
-            # Appel direct du modèle au lieu de model.predict().
-            with torch.inference_mode():
+        gc.collect()
 
-                results = model(
-                    source=image,
-                    conf=CONFIDENCE_THRESHOLD,
-                    imgsz=640,
-                    verbose=False
-                )
-
-        except Exception:
-
-            logger.exception(
-                "Erreur pendant la prédiction."
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Impossible de traiter l'image : {exc}"
             )
-
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Une erreur interne est "
-                    "survenue pendant l'analyse."
-                )
-            )
-
-        if not results:
-
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Le modèle n'a retourné "
-                    "aucun résultat."
-                )
-            )
-
-        result = results[0]
-
-        # ====================================================
-        # 8. AUCUNE TUMEUR
-        # ====================================================
-
-        if (
-            result.boxes is None
-            or len(result.boxes) == 0
-        ):
-
-            elapsed = (
-                time.perf_counter()
-                -
-                start_time
-            )
-
-            logger.info(
-                "Aucune tumeur détectée."
-            )
-
-            encoded_image = (
-                image_to_base64(
-                    image
-                )
-            )
-
-            response = {
-
-                "avertissement":
-                    DISCLAIMER,
-
-                "tumeur_detectee":
-                    False,
-
-                "nombre_tumeurs":
-                    0,
-
-                "detections":
-                    [],
-
-                "image_dimensions": {
-                    "largeur":
-                        image_width,
-                    "hauteur":
-                        image_height
-                },
-
-                "image_annotee_base64":
-                    encoded_image,
-
-                "temps_traitement_s":
-                    round(
-                        elapsed,
-                        3
-                    )
-            }
-
-            # Les résultats YOLO ne sont plus nécessaires.
-            del result
-            result = None
-
-            del results
-            results = None
-
-            return response
-
-        # ====================================================
-        # 9. DÉTECTIONS
-        # ====================================================
-
-        detections = []
-
-        # Une seule copie pour l'image annotée.
-        annotated = image.copy()
-
-        has_masks = (
-            result.masks is not None
-            and result.masks.data is not None
-            and len(result.masks.data) > 0
         )
 
-        colors = [
-            (0, 0, 255),
-            (255, 128, 0),
-            (0, 200, 100),
-            (200, 0, 200),
-        ]
+    # ========================================================
+    # INFÉRENCE YOLO
+    # ========================================================
 
-        number_detections = len(
-            result.boxes
+    try:
+
+        logger.info(
+            "Début de l'inférence YOLO..."
         )
+
+        results = model.predict(
+            source=image_np,
+            imgsz=IMG_SIZE,
+            conf=CONF_THRESHOLD,
+            device="cpu",
+            verbose=False,
+            save=False,
+            show=False,
+            stream=False,
+            retina_masks=False
+        )
+
+        logger.info(
+            "Inférence terminée."
+        )
+
+    except Exception as exc:
+
+        del image_np
+        del image
+
+        gc.collect()
+
+        logger.exception(
+            "Erreur pendant l'inférence."
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Erreur pendant l'inférence : {exc}"
+            )
+        )
+
+    # ========================================================
+    # RÉSULTAT
+    # ========================================================
+
+    if not results:
+
+        del image_np
+        del image
+
+        gc.collect()
+
+        raise HTTPException(
+            status_code=500,
+            detail="Aucun résultat retourné par le modèle."
+        )
+
+    result = results[0]
+
+    detections = []
+
+    # ========================================================
+    # RÉCUPÉRATION DES DÉTECTIONS
+    # ========================================================
+
+    if (
+        result.boxes is not None
+        and
+        len(result.boxes) > 0
+        and
+        result.masks is not None
+    ):
+
+        boxes = result.boxes
+
+        # Polygones dans les coordonnées de l'image
+        polygons = result.masks.xy
 
         for index in range(
-            number_detections
+            len(boxes)
         ):
 
-            # ------------------------------------------------
-            # BOX
-            # ------------------------------------------------
+            try:
 
-            box = (
-                result
-                .boxes
-                .xyxy[index]
-                .detach()
-                .cpu()
-                .tolist()
-            )
+                # ------------------------------------------------
+                # Classe
+                # ------------------------------------------------
 
-            # ------------------------------------------------
-            # CLASSE
-            # ------------------------------------------------
-
-            class_id = int(
-                result
-                .boxes
-                .cls[index]
-                .item()
-            )
-
-            class_name = (
-                model.names.get(
-                    class_id,
-                    f"Classe {class_id}"
-                )
-            )
-
-            # ------------------------------------------------
-            # CONFIANCE
-            # ------------------------------------------------
-
-            confidence = float(
-                result
-                .boxes
-                .conf[index]
-                .item()
-            )
-
-            color = colors[
-                index %
-                len(colors)
-            ]
-
-            # ------------------------------------------------
-            # MASQUE
-            # ------------------------------------------------
-
-            mask_resized = None
-
-            if (
-                has_masks
-                and
-                index <
-                len(result.masks.data)
-            ):
-
-                raw_mask = (
-                    result
-                    .masks
-                    .data[index]
-                    .detach()
-                    .cpu()
-                    .numpy()
+                class_id = int(
+                    boxes.cls[index].item()
                 )
 
-                mask_resized = (
-                    resize_mask_to_image(
-                        raw_mask,
-                        image_width,
-                        image_height
+                if isinstance(
+                    model.names,
+                    dict
+                ):
+
+                    class_name = model.names.get(
+                        class_id,
+                        str(class_id)
                     )
+
+                else:
+
+                    class_name = model.names[
+                        class_id
+                    ]
+
+                # ------------------------------------------------
+                # Confiance
+                # ------------------------------------------------
+
+                confidence = float(
+                    boxes.conf[index].item()
                 )
 
-                del raw_mask
+                # ------------------------------------------------
+                # Polygone
+                # ------------------------------------------------
+
+                if index >= len(polygons):
+
+                    continue
+
+                polygon = polygons[index]
+
+                # ------------------------------------------------
+                # Indicateurs
+                # ------------------------------------------------
 
                 indicators = (
-                    compute_segmentation_indicators(
-                        mask_resized,
-                        box,
+                    calculate_geometric_indicators(
+                        polygon,
                         image_width,
                         image_height
                     )
                 )
 
-            else:
+                if not indicators:
 
-                indicators = (
-                    compute_bbox_fallback_indicators(
-                        box,
-                        image_width,
-                        image_height
-                    )
-                )
+                    continue
 
-            # ------------------------------------------------
-            # DÉTECTION
-            # ------------------------------------------------
+                # ------------------------------------------------
+                # Détection
+                # ------------------------------------------------
 
-            detection = {
+                detections.append({
 
-                "id":
-                    index + 1,
+                    "id": index + 1,
 
-                "classe":
-                    class_name,
+                    "classe": class_name,
 
-                "classe_id":
-                    class_id,
-
-                "confiance":
-                    round(
+                    "confiance": round(
                         confidence,
-                        3
+                        4
                     ),
 
-                "boite_englobante": {
-                    "x1":
-                        round(
-                            box[0],
-                            2
-                        ),
-                    "y1":
-                        round(
-                            box[1],
-                            2
-                        ),
-                    "x2":
-                        round(
-                            box[2],
-                            2
-                        ),
-                    "y2":
-                        round(
-                            box[3],
-                            2
-                        )
-                },
+                    "masque_disponible": True,
 
-                "masque_disponible":
-                    mask_resized is not None,
+                    "indicateurs": indicators
+                })
 
-                "indicateurs":
-                    indicators
-            }
+            except Exception as exc:
 
-            detections.append(
-                detection
-            )
+                logger.warning(
+                    f"Erreur détection {index}: {exc}"
+                )
 
-            # ------------------------------------------------
-            # ANNOTATION
-            # ------------------------------------------------
+    # ========================================================
+    # NOMBRE DE TUMEURS
+    # ========================================================
 
-            draw_detection(
-                annotated,
-                box,
-                mask_resized,
-                class_name,
-                confidence,
-                color
-            )
+    number_tumors = len(
+        detections
+    )
 
-            # Le masque ne sert plus.
-            del mask_resized
+    tumor_detected = (
+        number_tumors > 0
+    )
 
-        # ====================================================
-        # 10. MEILLEURE DÉTECTION
-        # ====================================================
+    # ========================================================
+    # MEILLEURE DÉTECTION
+    # ========================================================
+
+    best_detection = None
+
+    if detections:
 
         best_detection = max(
             detections,
-            key=lambda x:
-                x["confiance"]
-        )
-
-        # ====================================================
-        # 11. ENCODAGE
-        # ====================================================
-
-        encoded_image = (
-            image_to_base64(
-                annotated
+            key=lambda item:
+            item.get(
+                "confiance",
+                0
             )
         )
 
-        # ====================================================
-        # 12. TEMPS
-        # ====================================================
+    # ========================================================
+    # IMAGE ANNOTÉE
+    # ========================================================
 
-        elapsed = (
-            time.perf_counter()
-            -
-            start_time
+    annotated_base64 = None
+
+    try:
+
+        if tumor_detected:
+
+            annotated_image = result.plot(
+                img=image_np,
+                boxes=True,
+                labels=True,
+                conf=True,
+                masks=True
+            )
+
+        else:
+
+            annotated_image = image_np.copy()
+
+        annotated_base64 = (
+            encode_image_base64(
+                annotated_image
+            )
         )
 
-        # ====================================================
-        # 13. LOG
-        # ====================================================
+        del annotated_image
 
-        logger.info(
-            "Détection : %d | "
-            "classe=%s | "
-            "confiance=%.3f | "
-            "masque=%s | "
-            "temps=%.3fs",
+    except Exception as exc:
 
-            len(detections),
-
-            best_detection[
-                "classe"
-            ],
-
-            best_detection[
-                "confiance"
-            ],
-
-            best_detection[
-                "masque_disponible"
-            ],
-
-            elapsed
+        logger.warning(
+            f"Impossible de créer l'image annotée : {exc}"
         )
 
-        # ====================================================
-        # 14. RÉPONSE
-        # ====================================================
+    # ========================================================
+    # TEMPS
+    # ========================================================
 
-        response = {
+    processing_time = (
+        time.time() -
+        start_time
+    )
 
-            "avertissement":
-                DISCLAIMER,
+    # ========================================================
+    # NETTOYAGE MÉMOIRE
+    # ========================================================
 
-            "tumeur_detectee":
-                True,
+    del results
+    del result
+    del image_np
+    del image
 
-            "nombre_tumeurs":
-                len(detections),
+    gc.collect()
 
-            "meilleure_detection":
-                best_detection,
+    # ========================================================
+    # RÉPONSE
+    # ========================================================
 
-            "detections":
-                detections,
+    return {
 
-            "image_dimensions": {
-                "largeur":
-                    image_width,
-                "hauteur":
-                    image_height
-            },
+        "status": "success",
 
-            "image_annotee_base64":
-                encoded_image,
+        "tumeur_detectee": tumor_detected,
 
-            "temps_traitement_s":
-                round(
-                    elapsed,
-                    3
-                )
-        }
+        "nombre_tumeurs": number_tumors,
 
-        # ====================================================
-        # LIBÉRATION ANTICIPÉE
-        # ====================================================
+        "meilleure_detection": best_detection,
 
-        # La réponse contient déjà toutes les informations
-        # nécessaires. Les objets YOLO temporaires peuvent
-        # maintenant être supprimés avant le return.
+        "detections": detections,
 
-        del result
-        result = None
+        "image_annotee_base64": annotated_base64,
 
-        del results
-        results = None
+        "temps_traitement_s": round(
+            processing_time,
+            3
+        ),
 
-        return response
+        "image": {
 
-    finally:
+            "largeur_px": image_width,
 
-        # ====================================================
-        # NETTOYAGE MÉMOIRE
-        # ====================================================
+            "hauteur_px": image_height
+        },
 
-        if results is not None:
-            del results
+        "modele": {
 
-        if result is not None:
-            del result
+            "tache": "segment",
 
-        if annotated is not None:
-            del annotated
+            "imgsz": IMG_SIZE,
 
-        if image is not None:
-            del image
+            "seuil_confiance": CONF_THRESHOLD
+        },
 
-        # Nettoyage du garbage collector Python.
-        gc.collect()
+        "avertissement": (
+            "Les résultats sont issus d'une analyse "
+            "automatique par intelligence artificielle. "
+            "Les indicateurs géométriques sont calculés "
+            "sur une coupe IRM 2D et ne remplacent pas "
+            "l'interprétation d'un professionnel de santé."
+        )
+    }

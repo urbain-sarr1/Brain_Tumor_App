@@ -1,16 +1,25 @@
 """
 Interface Streamlit - Brain Tumor App
 
-L'interface Streamlit ne charge PAS le modèle YOLO.
-Elle communique uniquement avec l'API FastAPI.
+Cette interface :
+    - ne charge PAS le modèle YOLO ;
+    - communique uniquement avec l'API FastAPI ;
+    - affiche les résultats de détection ;
+    - affiche les indicateurs géométriques 2D ;
+    - fournit une explication de chaque indicateur.
 
-API attendue :
-    POST /predict
+API :
     GET  /health
+    POST /predict
 """
+
+# ============================================================
+# IMPORTS
+# ============================================================
 
 import os
 import base64
+
 import requests
 import streamlit as st
 
@@ -24,7 +33,9 @@ API_URL = os.getenv(
     "http://127.0.0.1:8000"
 ).rstrip("/")
 
-PREDICT_URL = f"{API_URL}/predict"
+PREDICT_URL = (
+    f"{API_URL}/predict"
+)
 
 MAX_FILE_SIZE_MB = 10
 
@@ -55,10 +66,6 @@ st.markdown(
     """
     <style>
 
-    /* ======================================================
-       SUPPRESSION COMPLÈTE DE LA SIDEBAR
-       ====================================================== */
-
     [data-testid="stSidebar"] {
         display: none !important;
     }
@@ -71,20 +78,12 @@ st.markdown(
         display: none !important;
     }
 
-    /* ======================================================
-       CONTENEUR PRINCIPAL
-       ====================================================== */
-
     .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
         padding-left: 3rem;
         padding-right: 3rem;
     }
-
-    /* ======================================================
-       BOÎTES
-       ====================================================== */
 
     .info-box {
         padding: 1rem;
@@ -100,6 +99,16 @@ st.markdown(
         border: 1px solid #ffe69c;
         margin-top: 1rem;
         margin-bottom: 1rem;
+    }
+
+    .definition-box {
+        padding: 0.8rem;
+        border-radius: 8px;
+        background-color: #f5f7fa;
+        border: 1px solid #e1e5ea;
+        margin-top: -0.3rem;
+        margin-bottom: 1rem;
+        font-size: 0.92rem;
     }
 
     </style>
@@ -118,10 +127,10 @@ st.title(
 
 st.markdown(
     """
-    Cette application permet d'analyser une image IRM cérébrale
-    à l'aide d'un modèle d'intelligence artificielle spécialisé
+    Cette application analyse une image IRM cérébrale à l'aide
+    d'un modèle d'intelligence artificielle spécialisé
     dans la détection, la classification et la segmentation
-    des tumeurs.
+    des lésions tumorales.
     """
 )
 
@@ -136,74 +145,23 @@ st.warning(
 )
 
 
-# ============================================================
-# ÉTAT DE L'API
-# ============================================================
-
-with st.expander(
-    "🔧 État du service",
-    expanded=False
-):
-
-    st.write(
-        f"**API :** `{API_URL}`"
-    )
-
-    if st.button(
-        "Tester la connexion à l'API"
-    ):
-
-        try:
-
-            response = requests.get(
-                f"{API_URL}/health",
-                timeout=10
-            )
-
-            if response.status_code == 200:
-
-                health = response.json()
-
-                if health.get("model_loaded"):
-
-                    st.success(
-                        "✅ API disponible et modèle chargé."
-                    )
-
-                else:
-
-                    st.warning(
-                        "⚠️ API disponible mais modèle non chargé."
-                    )
-
-            else:
-
-                st.error(
-                    f"❌ API inaccessible : "
-                    f"HTTP {response.status_code}"
-                )
-
-        except requests.RequestException as exc:
-
-            st.error(
-                f"❌ Impossible de contacter l'API : {exc}"
-            )
-
 
 # ============================================================
-# UPLOAD IMAGE
+# UPLOAD
 # ============================================================
-
 st.subheader(
-    "📤 Sélectionner une image IRM"
+    "  "
+)
+st.subheader(
+    "  Sélectionner une image IRM"
 )
 
 uploaded_file = st.file_uploader(
-    "Choisissez une image à analyser",
+    "Choisissez une image **IRM** à analyser puis cliquez sur **Analyser l'image**.",
     type=ALLOWED_TYPES,
     accept_multiple_files=False,
     help=(
-        f"Formats acceptés : JPG, JPEG et PNG. "
+        "Formats acceptés : JPG, JPEG et PNG. "
         f"Taille maximale : {MAX_FILE_SIZE_MB} Mo."
     )
 )
@@ -215,28 +173,23 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is None:
 
-    st.info(
-        "👆 Sélectionnez une image IRM puis cliquez sur "
-        "**Analyser l'image**."
-    )
-
     st.stop()
 
 
 # ============================================================
-# CONTRÔLE TAILLE
+# TAILLE
 # ============================================================
 
 file_size_mb = (
-    uploaded_file.size
-    / (1024 * 1024)
+    uploaded_file.size /
+    (1024 * 1024)
 )
 
 if file_size_mb > MAX_FILE_SIZE_MB:
 
     st.error(
         f"❌ L'image fait {file_size_mb:.2f} Mo. "
-        f"La taille maximale autorisée est de "
+        f"La taille maximale est de "
         f"{MAX_FILE_SIZE_MB} Mo."
     )
 
@@ -244,7 +197,7 @@ if file_size_mb > MAX_FILE_SIZE_MB:
 
 
 # ============================================================
-# IMAGE SÉLECTIONNÉE
+# IMAGE
 # ============================================================
 
 st.subheader(
@@ -255,32 +208,20 @@ col_image, col_info = st.columns(
     [2, 1]
 )
 
-
-# ============================================================
-# AFFICHAGE IMAGE
-# ============================================================
-
 with col_image:
 
     st.image(
         uploaded_file,
         caption="Image IRM sélectionnée",
-        use_column_width=True
+        width="stretch"
     )
-
-
-# ============================================================
-# INFORMATIONS FICHIER
-# ============================================================
 
 with col_info:
 
     st.markdown(
         """
         <div class="info-box">
-
-        <strong>Informations du fichier</strong>
-
+            <strong>Informations du fichier</strong>
         </div>
         """,
         unsafe_allow_html=True
@@ -300,16 +241,16 @@ with col_info:
 
 
 # ============================================================
-# BOUTON ANALYSE
+# BOUTON
 # ============================================================
 
 st.divider()
 
 analyze = st.button(
     "🔍 Analyser l'image",
-    type="primary"
+    type="primary",
+    use_container_width=True
 )
-
 
 # ============================================================
 # ANALYSE
@@ -318,7 +259,7 @@ analyze = st.button(
 if analyze:
 
     # ========================================================
-    # LECTURE DES BYTES
+    # LECTURE
     # ========================================================
 
     try:
@@ -335,7 +276,7 @@ if analyze:
 
 
     # ========================================================
-    # APPEL API
+    # API
     # ========================================================
 
     with st.spinner(
@@ -364,8 +305,8 @@ if analyze:
 
             st.info(
                 "L'API Render est peut-être en cours "
-                "de démarrage ou le modèle prend trop "
-                "de temps à charger."
+                "de démarrage ou le modèle met trop "
+                "de temps à répondre."
             )
 
             st.stop()
@@ -397,42 +338,50 @@ if analyze:
 
     if response.status_code != 200:
 
-        if response.status_code == 400:
+        status = response.status_code
+
+        if status == 400:
 
             st.error(
-                "❌ Image invalide ou fichier corrompu."
+                "❌ Image invalide ou corrompue."
             )
 
-        elif response.status_code == 403:
+        elif status == 403:
 
             st.error(
-                "❌ API refusée (HTTP 403)."
+                "❌ Accès à l'API refusé (HTTP 403)."
             )
 
-            st.info(
-                "Vérifiez l'URL API utilisée par Streamlit "
-                "et la configuration du service Render."
-            )
-
-        elif response.status_code == 413:
+        elif status == 413:
 
             st.error(
                 "❌ Image trop volumineuse."
             )
 
-        elif response.status_code == 415:
+        elif status == 415:
 
             st.error(
                 "❌ Format d'image non accepté."
             )
 
-        elif response.status_code == 500:
+        elif status == 500:
 
             st.error(
                 "❌ Erreur interne pendant l'analyse."
             )
 
-        elif response.status_code == 503:
+        elif status == 502:
+
+            st.error(
+                "❌ L'API a retourné une erreur 502."
+            )
+
+            st.info(
+                "Le service FastAPI a probablement "
+                "redémarré pendant l'inférence."
+            )
+
+        elif status == 503:
 
             st.error(
                 "❌ Le modèle IA n'est actuellement "
@@ -442,14 +391,8 @@ if analyze:
         else:
 
             st.error(
-                f"❌ Erreur API : HTTP "
-                f"{response.status_code}"
+                f"❌ Erreur API : HTTP {status}"
             )
-
-
-        # ----------------------------------------------------
-        # DÉTAIL ERREUR FASTAPI
-        # ----------------------------------------------------
 
         try:
 
@@ -478,7 +421,7 @@ if analyze:
 
 
     # ========================================================
-    # LECTURE JSON
+    # JSON
     # ========================================================
 
     try:
@@ -504,11 +447,6 @@ if analyze:
     st.subheader(
         "📊 Résultats de l'analyse"
     )
-
-
-    # ========================================================
-    # RÉCUPÉRATION RÉSULTATS
-    # ========================================================
 
     tumor_detected = result.get(
         "tumeur_detectee",
@@ -547,26 +485,23 @@ if analyze:
     # INFORMATIONS RAPIDES
     # ========================================================
 
-    metric1, metric2, metric3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
 
-
-    with metric1:
+    with c1:
 
         st.metric(
             "Tumeur détectée",
             "Oui" if tumor_detected else "Non"
         )
 
-
-    with metric2:
+    with c2:
 
         st.metric(
             "Zones détectées",
             number_tumors
         )
 
-
-    with metric3:
+    with c3:
 
         if processing_time is not None:
 
@@ -606,7 +541,7 @@ if analyze:
             st.image(
                 annotated_bytes,
                 caption="Image analysée et annotée",
-                use_column_width=True
+                width="stretch"
             )
 
             del annotated_bytes
@@ -614,8 +549,7 @@ if analyze:
         except Exception as exc:
 
             st.error(
-                "❌ Impossible d'afficher "
-                f"l'image annotée : {exc}"
+                f"❌ Impossible d'afficher l'image annotée : {exc}"
             )
 
 
@@ -628,6 +562,8 @@ if analyze:
     )
 
     if best_detection:
+
+        st.divider()
 
         st.subheader(
             "🏆 Détection principale"
@@ -648,25 +584,34 @@ if analyze:
             False
         )
 
-
         c1, c2, c3 = st.columns(3)
-
 
         with c1:
 
             st.metric(
-                "Classe",
+                "Type de tumeur",
                 classe
             )
 
-
         with c2:
 
-            st.metric(
-                "Confiance",
-                f"{confiance * 100:.1f}%"
-            )
+            try:
 
+                confidence_percent = (
+                    float(confiance) * 100
+                )
+
+                st.metric(
+                    "Confiance du modèle",
+                    f"{confidence_percent:.1f}%"
+                )
+
+            except Exception:
+
+                st.metric(
+                    "Confiance du modèle",
+                    str(confiance)
+                )
 
         with c3:
 
@@ -681,7 +626,7 @@ if analyze:
 
 
         # ====================================================
-        # INDICATEURS GÉOMÉTRIQUES
+        # INDICATEURS
         # ====================================================
 
         indicators = best_detection.get(
@@ -690,149 +635,181 @@ if analyze:
 
         if indicators:
 
+            st.divider()
+
             st.subheader(
-                "📐 Indicateurs géométriques"
+                "📐 Analyse quantitative de la tumeur"
             )
+
+
+
+            # =================================================
+            # TAILLE
+            # =================================================
+
+            st.markdown(
+                "### 📏 Taille de la lésion"
+            )
+
+            # -------------------------------------------------
+            # Surface
+            # -------------------------------------------------
+
+            surface = indicators.get(
+                "surface_masque_px"
+            )
+
+            if surface is not None:
+
+                st.metric(
+                    "Surface du masque",
+                    f"{surface:.2f} px²"
+                )
+
+                st.markdown(
+                    """
+                    <div class="definition-box">
+                    <strong>Surface du masque :</strong>
+                    représente l'aire de la région identifiée
+                    comme tumorale par le modèle dans cette coupe
+                    IRM. La valeur est exprimée en pixels carrés.
+                    Elle correspond à une mesure 2D et ne représente
+                    pas un volume tumoral.
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                perimeter = indicators.get(
+                    "perimetre_px"
+                )
+
+                if perimeter is not None:
+
+                    st.metric(
+                        "Périmètre",
+                        f"{perimeter:.2f} px"
+                    )
+
+                    st.caption(
+                        "Longueur approximative du contour "
+                        "de la région segmentée."
+                    )
+
+            with c2:
+
+                diameter_max = indicators.get(
+                    "diametre_max_px"
+                )
+
+                if diameter_max is not None:
+
+                    st.metric(
+                        "Diamètre maximal",
+                        f"{diameter_max:.2f} px"
+                    )
+
+                    st.caption(
+                        "Plus grande distance mesurée "
+                        "entre deux points du contour."
+                    )
+
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                diameter_min = indicators.get(
+                    "diametre_min_px"
+                )
+
+                if diameter_min is not None:
+
+                    st.metric(
+                        "Diamètre minimal approximatif",
+                        f"{diameter_min:.2f} px"
+                    )
+
+                    st.caption(
+                        "Plus petite dimension du rectangle "
+                        "orienté entourant la lésion. "
+                        "Il s'agit d'une approximation géométrique."
+                    )
+
+            with c2:
+
+                ratio = indicators.get(
+                    "ratio_largeur_hauteur"
+                )
+
+                if ratio is not None:
+
+                    st.metric(
+                        "Ratio largeur / hauteur",
+                        f"{float(ratio):.3f}"
+                    )
+
+                    st.caption(
+                        "Compare la largeur et la hauteur "
+                        "de la boîte englobante de la lésion."
+                    )
+
+
+            # =================================================
+            # AXES
+            # =================================================
+
+            st.markdown(
+                "### 📐 Axes et dimensions"
+            )
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                major_axis = indicators.get(
+                    "axe_majeur_px"
+                )
+
+                if major_axis is not None:
+
+                    st.metric(
+                        "Axe majeur",
+                        f"{major_axis:.2f} px"
+                    )
+
+                    st.caption(
+                        "Direction principale selon laquelle "
+                        "la lésion est la plus étendue."
+                    )
+
+            with c2:
+
+                minor_axis = indicators.get(
+                    "axe_mineur_px"
+                )
+
+                if minor_axis is not None:
+
+                    st.metric(
+                        "Axe mineur",
+                        f"{minor_axis:.2f} px"
+                    )
+
+                    st.caption(
+                        "Dimension perpendiculaire à l'axe majeur."
+                    )
 
 
             dimensions = indicators.get(
                 "dimensions_px",
                 {}
             )
-
-            centre = indicators.get(
-                "centre",
-                {}
-            )
-
-
-            # ------------------------------------------------
-            # LIGNE 1
-            # ------------------------------------------------
-
-            c1, c2, c3 = st.columns(3)
-
-
-            with c1:
-
-                if "surface_masque_px" in indicators:
-
-                    st.metric(
-                        "Surface du masque",
-                        f"{indicators['surface_masque_px']:.2f} px²"
-                    )
-
-                elif "surface_bounding_box_px" in indicators:
-
-                    st.metric(
-                        "Surface",
-                        f"{indicators['surface_bounding_box_px']:.2f} px²"
-                    )
-
-
-            with c2:
-
-                if "surface_masque_mm2" in indicators:
-
-                    st.metric(
-                        "Surface",
-                        f"{indicators['surface_masque_mm2']:.2f} mm²"
-                    )
-
-
-            with c3:
-
-                if "occupation_image_pourcent" in indicators:
-
-                    st.metric(
-                        "Occupation de l'image",
-                        f"{indicators['occupation_image_pourcent']:.2f}%"
-                    )
-
-
-            # ------------------------------------------------
-            # LIGNE 2
-            # ------------------------------------------------
-
-            c1, c2, c3 = st.columns(3)
-
-
-            with c1:
-
-                if "perimetre_px" in indicators:
-
-                    st.metric(
-                        "Périmètre",
-                        f"{indicators['perimetre_px']:.2f} px"
-                    )
-
-
-            with c2:
-
-                if "diametre_max_px" in indicators:
-
-                    st.metric(
-                        "Diamètre maximal",
-                        f"{indicators['diametre_max_px']:.2f} px"
-                    )
-
-
-            with c3:
-
-                if "circularite" in indicators:
-
-                    st.metric(
-                        "Circularité",
-                        f"{indicators['circularite']:.3f}"
-                    )
-
-
-            # ------------------------------------------------
-            # LIGNE 3
-            # ------------------------------------------------
-
-            c1, c2, c3 = st.columns(3)
-
-
-            with c1:
-
-                if "ratio_largeur_hauteur" in indicators:
-
-                    st.metric(
-                        "Ratio largeur / hauteur",
-                        indicators[
-                            "ratio_largeur_hauteur"
-                        ]
-                    )
-
-
-            with c2:
-
-                if "position_dans_image" in indicators:
-
-                    st.metric(
-                        "Position",
-                        indicators[
-                            "position_dans_image"
-                        ]
-                    )
-
-
-            with c3:
-
-                if "distance_centre_image_px" in indicators:
-
-                    st.metric(
-                        "Distance centre image",
-                        (
-                            f"{indicators['distance_centre_image_px']:.2f} px"
-                        )
-                    )
-
-
-            # ------------------------------------------------
-            # DIMENSIONS
-            # ------------------------------------------------
 
             if dimensions:
 
@@ -846,47 +823,314 @@ if analyze:
                     0
                 )
 
-                st.write(
-                    "**Dimensions de la zone segmentée :** "
+                st.info(
+                    f"📦 **Boîte englobante :** "
                     f"{largeur} × {hauteur} px"
                 )
 
 
-            # ------------------------------------------------
-            # CENTRE
-            # ------------------------------------------------
+            # =================================================
+            # FORME
+            # =================================================
 
-            if centre:
+            st.markdown(
+                "### 🔵 Caractéristiques de la forme"
+            )
 
-                centre_x = centre.get(
-                    "x",
-                    0
+            c1, c2, c3 = st.columns(3)
+
+            with c1:
+
+                circularity = indicators.get(
+                    "circularite"
                 )
 
-                centre_y = centre.get(
-                    "y",
-                    0
+                if circularity is not None:
+
+                    st.metric(
+                        "Circularité",
+                        f"{float(circularity):.3f}"
+                    )
+
+                    st.caption(
+                        "Mesure à quel point la forme se rapproche "
+                        "d'un cercle. Une valeur proche de 1 indique "
+                        "une forme très circulaire."
+                    )
+
+            with c2:
+
+                eccentricity = indicators.get(
+                    "excentricite"
                 )
 
-                st.write(
-                    "**Centre de la tumeur :** "
-                    f"X = {centre_x:.2f}, "
-                    f"Y = {centre_y:.2f}"
+                if eccentricity is not None:
+
+                    st.metric(
+                        "Excentricité",
+                        f"{float(eccentricity):.3f}"
+                    )
+
+                    st.caption(
+                        "Mesure l'allongement de la forme. "
+                        "Une valeur proche de 0 indique une forme "
+                        "plus circulaire ; une valeur proche de 1 "
+                        "indique une forme plus allongée."
+                    )
+
+            with c3:
+
+                solidity = indicators.get(
+                    "solidite"
+                )
+
+                if solidity is not None:
+
+                    st.metric(
+                        "Solidité",
+                        f"{float(solidity):.3f}"
+                    )
+
+                    st.caption(
+                        "Rapport entre la surface de la lésion "
+                        "et celle de son enveloppe convexe. "
+                        "Une valeur proche de 1 indique une "
+                        "forme relativement compacte."
+                    )
+
+
+            c1, c2, c3 = st.columns(3)
+
+            with c1:
+
+                extent = indicators.get(
+                    "etendue"
+                )
+
+                if extent is not None:
+
+                    st.metric(
+                        "Étendue",
+                        f"{float(extent):.3f}"
+                    )
+
+                    st.caption(
+                        "Rapport entre la surface du masque "
+                        "et la surface de sa boîte englobante."
+                    )
+
+            with c2:
+
+                convexity = indicators.get(
+                    "convexite"
+                )
+
+                if convexity is not None:
+
+                    st.metric(
+                        "Convexité",
+                        f"{float(convexity):.3f}"
+                    )
+
+                    st.caption(
+                        "Compare le contour réel avec son "
+                        "enveloppe convexe. Une valeur proche "
+                        "de 1 indique un contour plus proche "
+                        "d'une forme convexe."
+                    )
+
+            with c3:
+
+                orientation = indicators.get(
+                    "orientation_degres"
+                )
+
+                if orientation is not None:
+
+                    st.metric(
+                        "Orientation",
+                        f"{float(orientation):.1f}°"
+                    )
+
+                    st.caption(
+                        "Angle de l'axe principal de la lésion "
+                        "par rapport à l'axe horizontal de l'image."
+                    )
+
+
+            # =================================================
+            # LOCALISATION
+            # =================================================
+
+            st.markdown(
+                "### 📍 Localisation dans l'image"
+            )
+
+            centre = indicators.get(
+                "centre",
+                {}
+            )
+
+            position_normalisee = indicators.get(
+                "position_normalisee",
+                {}
+            )
+
+            c1, c2, c3 = st.columns(3)
+
+            with c1:
+
+                if centre:
+
+                    x = centre.get(
+                        "x",
+                        0
+                    )
+
+                    y = centre.get(
+                        "y",
+                        0
+                    )
+
+                    st.metric(
+                        "Centre X",
+                        f"{float(x):.1f} px"
+                    )
+
+                    st.caption(
+                        "Coordonnée horizontale du centre "
+                        "de la région segmentée."
+                    )
+
+            with c2:
+
+                if centre:
+
+                    st.metric(
+                        "Centre Y",
+                        f"{float(y):.1f} px"
+                    )
+
+                    st.caption(
+                        "Coordonnée verticale du centre "
+                        "de la région segmentée."
+                    )
+
+            with c3:
+
+                position_label = indicators.get(
+                    "position_dans_image"
+                )
+
+                if position_label:
+
+                    st.metric(
+                        "Position",
+                        position_label
+                    )
+
+                    st.caption(
+                        "Localisation qualitative de la lésion "
+                        "dans la coupe analysée."
+                    )
+
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                x_percent = position_normalisee.get(
+                    "x_pourcent"
+                )
+
+                if x_percent is not None:
+
+                    st.metric(
+                        "Position horizontale",
+                        f"{float(x_percent):.1f}%"
+                    )
+
+                    st.caption(
+                        "Position du centre exprimée en "
+                        "pourcentage de la largeur de l'image."
+                    )
+
+            with c2:
+
+                y_percent = position_normalisee.get(
+                    "y_pourcent"
+                )
+
+                if y_percent is not None:
+
+                    st.metric(
+                        "Position verticale",
+                        f"{float(y_percent):.1f}%"
+                    )
+
+                    st.caption(
+                        "Position du centre exprimée en "
+                        "pourcentage de la hauteur de l'image."
+                    )
+
+
+            distance = indicators.get(
+                "distance_centre_image_px"
+            )
+
+            if distance is not None:
+
+                st.metric(
+                    "Distance au centre de l'image",
+                    f"{float(distance):.2f} px"
+                )
+
+                st.caption(
+                    "Distance entre le centre de la lésion "
+                    "et le centre géométrique de l'image."
                 )
 
 
-            # ------------------------------------------------
-            # AVERTISSEMENT
-            # ------------------------------------------------
+            # =================================================
+            # OCCUPATION
+            # =================================================
 
-            warning = indicators.get(
+            st.markdown(
+                "### 📊 Occupation de l'image"
+            )
+
+            occupation = indicators.get(
+                "occupation_image_pourcent"
+            )
+
+            if occupation is not None:
+
+                st.metric(
+                    "Occupation de l'image",
+                    f"{float(occupation):.4f}%"
+                )
+
+                st.caption(
+                    "Pourcentage de la surface totale de "
+                    "l'image occupé par la région segmentée. "
+                    "Ce n'est pas le pourcentage du cerveau "
+                    "occupé par la tumeur."
+                )
+
+
+
+            # =================================================
+            # AVERTISSEMENT API
+            # =================================================
+
+            api_warning = indicators.get(
                 "avertissement"
             )
 
-            if warning:
+            if api_warning:
 
-                st.info(
-                    warning
+                st.warning(
+                    api_warning
                 )
 
 
@@ -901,8 +1145,10 @@ if analyze:
 
     if len(detections) > 1:
 
+        st.divider()
+
         st.subheader(
-            "🔎 Détails des autres détections"
+            "🔎 Autres détections"
         )
 
         for detection in detections:
@@ -922,12 +1168,6 @@ if analyze:
                 0
             )
 
-            mask_available = detection.get(
-                "masque_disponible",
-                False
-            )
-
-
             with st.expander(
                 f"Détection #{detection_id} — {classe}"
             ):
@@ -937,19 +1177,20 @@ if analyze:
                 )
 
                 st.write(
-                    "**Confiance :** "
-                    f"{confidence * 100:.1f}%"
+                    f"**Confiance :** "
+                    f"{float(confidence) * 100:.1f}%"
                 )
 
                 st.write(
-                    "**Masque :** "
-                    + (
-                        "Disponible"
-                        if mask_available
-                        else "Non disponible"
+                    "**Segmentation :** "
+                    "Disponible"
+                    if detection.get(
+                        "masque_disponible",
+                        False
                     )
+                    else
+                    "**Segmentation :** Non disponible"
                 )
-
 
                 detection_indicators = detection.get(
                     "indicateurs"
@@ -970,10 +1211,18 @@ if analyze:
         """
         <div class="warning-box">
 
-        ⚠️ <strong>Important :</strong>
-        les résultats présentés sont issus d'un modèle
-        d'intelligence artificielle et doivent être interprétés
-        et validés par un professionnel de santé.
+        ⚠️ <strong>Important :</strong><br>
+
+        Les résultats présentés sont issus d'un modèle
+        d'intelligence artificielle et doivent être
+        interprétés et validés par un professionnel de santé.
+
+        Les indicateurs géométriques correspondent à des
+        mesures réalisées sur une image IRM 2D. Ils décrivent
+        la morphologie apparente de la région segmentée et
+        ne permettent pas, à eux seuls, d'établir un diagnostic,
+        d'évaluer la gravité d'une tumeur ou de déterminer
+        son volume réel en 3D.
 
         </div>
         """,
