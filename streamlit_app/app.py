@@ -204,8 +204,30 @@ st.subheader(
     "🖼️ Image sélectionnée"
 )
 
+
+st.markdown(
+    """
+    <style>
+    .info-box {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        height: 100%;
+        padding: 1.2rem;
+        border-radius: 16px;
+        background-color: rgba(240, 242, 246, 0.6);
+    }
+    .info-box p {
+        margin: 0.4rem 0;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 col_image, col_info = st.columns(
-    [2, 1]
+    [1, 1],
+    vertical_alignment="center"
 )
 
 with col_image:
@@ -213,32 +235,22 @@ with col_image:
     st.image(
         uploaded_file,
         caption="Image IRM sélectionnée",
-        width="stretch"
+        width=450
     )
 
 with col_info:
 
     st.markdown(
-        """
+        f"""
         <div class="info-box">
-            <strong>Informations du fichier</strong>
+            <h3>Informations du fichier :</h3>
+            <p><h6>Nom :</h6> {uploaded_file.name}</p>
+            <p><h6>Type :</h6> {uploaded_file.type}</p>
+            <p><h6>Taille :</h6> {file_size_mb:.2f} Mo</p>
         </div>
         """,
         unsafe_allow_html=True
     )
-
-    st.write(
-        f"**Nom :** {uploaded_file.name}"
-    )
-
-    st.write(
-        f"**Type :** {uploaded_file.type}"
-    )
-
-    st.write(
-        f"**Taille :** {file_size_mb:.2f} Mo"
-    )
-
 
 # ============================================================
 # BOUTON
